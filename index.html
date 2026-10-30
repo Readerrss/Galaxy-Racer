@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>RoadSense Overdrive // Neural Interceptor</title>
+<script>(function(){const w=console.warn;console.warn=function(...a){if(a[0]&&typeof a[0]==='string'&&a[0].includes('cdn.tailwindcss.com'))return;w.apply(console,a);};})();</script>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="is-pc">
+<div id="gameViewportWrapper">
+<canvas id="gameCanvas" class="filter-standard"></canvas>
+<div id="atmosphereOverlay"></div>
+<div id="epoch250RedAlertModal" style="display:none;" class="absolute inset-0 z-[45] flex items-center justify-center pointer-events-none px-4">
+<div class="red-klaxon-banner border-2 rounded-2xl px-6 py-4 max-w-lg w-full text-center space-y-1.5">
+<div class="text-xs sm:text-sm mono-num font-black text-red-200 tracking-widest uppercase">🚨 CRITICAL ANOMALY // SINGULARITY BREACH 🚨</div>
+<div class="title-cinzel text-lg sm:text-2xl font-black text-white tracking-wider">WARNING: EPOCH 250 INBOUND</div>
+<div class="text-[11px] sm:text-xs mono-num font-extrabold text-amber-300 uppercase">VOID MAX OVERDRIVE &bull; 800M EVENT HORIZON CORRIDOR</div>
+</div>
+</div>
+<div id="singularityAlertBanner" style="display:none;" class="hud-collapsible absolute top-14 inset-x-0 z-25 flex justify-center pointer-events-none px-3">
+<div class="px-4 py-1 rounded-xl bg-purple-950/90 border border-cyan-400 text-cyan-200 mono-num text-[10px] sm:text-xs font-extrabold tracking-wider uppercase shadow-[0_0_18px_rgba(0,245,212,0.45)] text-center">🌌 EPOCH 250 SINGULARITY ACTIVE — VOID MAX OVERDRIVE (800M) 🌌</div>
+</div>
+<div id="startModal" style="display:flex;" class="absolute inset-0 bg-[#04060a]/90 z-[50] flex items-center justify-center p-2 sm:p-4">
+<div class="hardware-panel modal-anim px-3.5 py-2.5 sm:p-5 rounded-2xl max-w-xl w-full space-y-2 sm:space-y-3 border border-[#2d364a] shadow-2xl">
+<div class="flex items-center justify-between gap-2 border-b border-[#232836] pb-1.5 sm:pb-2">
+<div class="flex items-center gap-2 min-w-0">
+<span class="px-2 py-0.5 text-[8.5px] sm:text-[9px] mono-num font-bold uppercase bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 rounded-full shrink-0">OVERDRIVE</span>
+<h1 class="title-cinzel text-xs sm:text-lg font-bold text-white tracking-wider truncate">ROADSENSE: OVERDRIVE</h1>
+</div>
+<div class="recessed-well px-2.5 py-1 rounded-lg text-[10px] mono-num flex items-center gap-1.5 shrink-0">
+<span>👑 #1:</span><strong id="bootTopLeaderName" class="text-amber-300">Unclaimed</strong><span id="bootTopLeaderScore" class="text-emerald-400 font-bold"></span>
+</div>
+</div>
+<div class="recessed-well p-2 sm:p-3 rounded-xl border border-[#232b3e] space-y-1.5">
+<div class="flex items-center justify-between gap-2 text-xs">
+<div class="flex items-center gap-2 min-w-0">
+<span id="activePilotColorDot" class="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block shrink-0 shadow"></span>
+<span class="text-gray-300 truncate text-[11px] sm:text-xs">Pilot: <strong id="activePilotLabel" class="text-white">Guest Pilot</strong></span>
+<span id="activeLiveryBadge" class="px-2 py-0.5 text-[9.5px] mono-num rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 shrink-0">Tactical Steel</span>
+</div>
+<button type="button" id="switchAccountBtn" onclick="openSwitchAccountRow()" class="hidden px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 text-[10px] mono-num font-bold transition cursor-pointer shrink-0">⇄ Switch Account</button>
+</div>
+<div id="pilotLoginInputRow" class="flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 pt-1.5 border-t border-[#181d29]">
+<div class="flex items-center gap-1.5">
+<span class="text-[10px] mono-num font-bold text-sky-400 shrink-0">🔑 ID:</span>
+<input type="text" id="pilotIdInput" maxlength="4" inputmode="numeric" autocomplete="off" placeholder="XXXX" onkeydown="if(event.key==='Enter')loginPilotById()" class="bg-[#07090e] border border-[#2e384f] focus:border-sky-400 rounded-lg px-2 py-1 text-xs mono-num text-white tracking-widest w-16 text-center focus:outline-none">
+<button type="button" onclick="loginPilotById()" class="px-2.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-black font-bold text-[11px] transition cursor-pointer shrink-0">Login ID</button>
+</div>
+<div id="guestNameInputRow" class="flex items-center gap-1.5 flex-1 min-w-[140px]">
+<span class="text-[10px] mono-num text-gray-400 shrink-0">NAME:</span>
+<input type="text" id="guestCallsignInput" maxlength="16" autocomplete="off" placeholder="John Doe" onkeydown="if(event.key==='Enter')confirmGuestAccountLogin()" oninput="updateGuestCallsign(this.value)" class="w-full bg-[#07090e] border border-[#252d40] focus:border-emerald-400 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none">
+<button type="button" onclick="confirmGuestAccountLogin()" class="px-2 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] mono-num font-bold cursor-pointer shrink-0">✓ Set</button>
+</div>
+</div>
+<div id="loginFeedbackBanner" class="hidden text-[10.5px] font-semibold px-2 py-1 rounded-lg"></div>
+</div>
+<div class="grid grid-cols-3 gap-2 text-left mono-num">
+<div class="recessed-well px-2.5 py-1.5 sm:p-2 rounded-xl border border-[#1f2637]"><div class="text-gray-400 text-[8.5px] sm:text-[9px]">BEST SCORE</div><div id="bootHighScore" class="text-emerald-400 font-extrabold text-xs sm:text-sm">0</div></div>
+<div class="recessed-well px-2.5 py-1.5 sm:p-2 rounded-xl border border-[#1f2637]"><div class="text-gray-400 text-[8.5px] sm:text-[9px]">MAX EPOCH</div><div id="bootBestEpoch" class="text-sky-300 font-extrabold text-xs sm:text-sm">Epoch 1</div></div>
+<div class="recessed-well px-2.5 py-1.5 sm:p-2 rounded-xl border border-[#1f2637]"><div class="text-gray-400 text-[8.5px] sm:text-[9px]">PHANTOM FLASHES</div><div id="bootTotalFlashes" class="text-purple-300 font-extrabold text-xs sm:text-sm">0</div></div>
+</div>
+<div class="flex items-center gap-2 pt-0.5">
+<button type="button" onclick="startGameSession()" class="btn-launch flex-1 py-2 sm:py-2.5 px-3 rounded-xl text-xs sm:text-sm uppercase tracking-wider cursor-pointer">▶ Engage Interceptor</button>
+<button type="button" onclick="openLeaderboardModal()" class="px-3 py-2 sm:py-2.5 rounded-xl bg-[#181f2e] hover:bg-[#222c40] text-amber-300 border border-amber-500/40 text-xs font-bold transition cursor-pointer shrink-0">🏆 Ranks</button>
+<button type="button" onclick="openPauseSettingsModal('game')" class="px-3 py-2 sm:py-2.5 rounded-xl bg-[#181f2e] hover:bg-[#222c40] text-sky-300 border border-sky-500/40 text-xs font-bold transition cursor-pointer shrink-0">⚙️ Settings</button>
+<button type="button" onclick="exitGamePortal()" class="px-3 py-2 sm:py-2.5 rounded-xl bg-red-600/85 hover:bg-red-500 text-white border border-red-400/40 text-xs font-bold transition cursor-pointer shrink-0">🚪 Exit</button>
+</div>
+</div>
+</div>
+<div id="gameOverModal" style="display:none;" class="absolute inset-0 bg-black/85 z-[55] flex items-center justify-center p-2.5 sm:p-5">
+<div class="hardware-panel modal-anim p-3.5 sm:p-5 rounded-2xl max-w-md w-full space-y-2.5 border border-red-500/40 shadow-2xl text-center">
+<span class="px-2.5 py-0.5 text-[9.5px] mono-num font-bold uppercase bg-red-500/20 text-red-300 border border-red-500/40 rounded-full">CRITICAL COLLISION // HULL 0%</span>
+<h2 class="title-cinzel text-base sm:text-xl font-bold text-white">RUN DEBRIEF</h2>
+<div class="grid grid-cols-2 gap-2 text-left mono-num text-xs">
+<div class="recessed-well p-2 rounded-xl"><div class="text-[9.5px] text-gray-400">RUN SCORE</div><div id="finalScoreVal" class="text-base sm:text-lg font-extrabold text-emerald-400">0</div></div>
+<div class="recessed-well p-2 rounded-xl"><div class="text-[9.5px] text-gray-400">ACCOUNT BEST</div><div id="finalBestVal" class="text-base sm:text-lg font-extrabold text-amber-300">0</div></div>
+<div class="recessed-well p-2 rounded-xl"><div class="text-[9.5px] text-gray-400">EPOCH &amp; DIMENSION</div><div id="finalEpochVal" class="text-xs font-bold text-sky-300 truncate">Epoch 1</div></div>
+<div class="recessed-well p-2 rounded-xl"><div class="text-[9.5px] text-gray-400">PHANTOM FLASHES</div><div id="finalNearMissVal" class="text-sm font-bold text-purple-300">0</div></div>
+</div>
+<div class="flex items-center gap-2 pt-1">
+<button type="button" onclick="startGameSession()" class="btn-launch flex-1 py-2.5 px-3 rounded-xl text-xs uppercase tracking-wider cursor-pointer">↻ Reboot</button>
+<button type="button" onclick="openLeaderboardModal()" class="px-3 py-2.5 rounded-xl bg-[#181f2e] hover:bg-[#232d42] text-amber-300 border border-amber-500/40 text-xs font-bold cursor-pointer">🏆 Ranks</button>
+<button type="button" onclick="openPauseSettingsModal('game')" class="px-3 py-2.5 rounded-xl bg-[#181f2e] hover:bg-[#232d42] text-sky-300 border border-sky-500/40 text-xs font-bold cursor-pointer">⚙️</button>
+<button type="button" onclick="returnToMainMenu()" class="px-3 py-2.5 rounded-xl bg-[#1f2738] hover:bg-[#2b354b] text-gray-200 border border-gray-600/40 text-xs font-bold cursor-pointer">← Back</button>
+</div>
+</div>
+</div>
+<div id="pauseSettingsModal" style="display:none;" class="absolute inset-0 bg-black/85 z-[65] flex items-center justify-center p-2 sm:p-4">
+<div class="hardware-panel modal-anim w-full max-w-2xl rounded-2xl border border-[#2e384e] shadow-2xl flex flex-col max-h-[94%] overflow-hidden">
+<div class="px-3.5 py-2 bg-[#0c0f16] border-b border-[#232836] flex flex-wrap items-center justify-between gap-2 shrink-0">
+<div class="flex items-center gap-2"><span class="w-2 h-2 rounded-full bg-sky-400 animate-pulse"></span><h2 class="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">SETTINGS HUB</h2></div>
+<div class="flex items-center gap-1.5">
+<button type="button" id="inGameRestartBtn" onclick="startGameSession()" class="hidden px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold cursor-pointer">↻ Restart</button>
+<button type="button" id="inGameMenuBtn" onclick="returnToMainMenu()" class="hidden px-2.5 py-1 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-[11px] font-bold cursor-pointer">← Menu</button>
+<button type="button" onclick="openLeaderboardModal()" class="px-2.5 py-1 rounded-lg bg-[#171d2b] hover:bg-[#222b3e] text-amber-300 border border-amber-500/30 text-[11px] font-bold cursor-pointer">🏆 Ranks</button>
+<button type="button" id="resumeOrCloseSettingsBtn" onclick="resumeFromSettings()" class="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black text-[11px] font-extrabold cursor-pointer">← Back</button>
+</div>
+</div>
+<div id="settingsTabNavGrid" class="px-3 py-1.5 bg-[#090b10] border-b border-[#232836] grid grid-cols-4 gap-1.5 shrink-0">
+<button type="button" id="setTabBtn_game" onclick="switchSettingsTab('game')" class="py-1.5 px-2 rounded-lg text-[10px] sm:text-[11px] font-bold bg-sky-500 text-black cursor-pointer text-center truncate">🎮 Game</button>
+<button type="button" id="setTabBtn_sounds" onclick="switchSettingsTab('sounds')" class="py-1.5 px-2 rounded-lg text-[10px] sm:text-[11px] font-semibold bg-[#131722] text-gray-300 border border-[#232836] cursor-pointer text-center truncate">🔊 Sounds</button>
+<button type="button" id="setTabBtn_controls" onclick="switchSettingsTab('controls')" class="py-1.5 px-2 rounded-lg text-[10px] sm:text-[11px] font-semibold bg-[#131722] text-gray-300 border border-[#232836] cursor-pointer text-center truncate">🕹️ Controls</button>
+<button type="button" id="setTabBtn_graphics" onclick="switchSettingsTab('graphics')" class="py-1.5 px-2 rounded-lg text-[10px] sm:text-[11px] font-semibold bg-[#131722] text-gray-300 border border-[#232836] cursor-pointer text-center truncate">🖥️ Graphics</button>
+<button type="button" id="setTabBtn_dev" onclick="switchSettingsTab('dev')" class="hidden py-1.5 px-2 rounded-lg text-[10px] sm:text-[11px] font-semibold bg-[#131722] text-cyan-300 border border-cyan-500/30 cursor-pointer text-center truncate">🛠️ Dev (1117)</button>
+</div>
+<div class="flex-1 p-3 sm:p-4 overflow-y-auto space-y-2.5 text-xs">
+<div id="setTab_game" class="space-y-2.5">
+<div class="flex items-center justify-between px-1">
+<span class="text-[10px] mono-num uppercase text-gray-400 font-bold">Difficulty, Vehicle Livery &amp; Dimensions</span>
+<button type="button" onclick="resetGameSettingsOnly()" class="px-2.5 py-1 rounded-lg bg-[#171c28] hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] mono-num font-bold cursor-pointer">↺ Reset Game</button>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="flex items-center justify-between"><span class="font-bold text-white uppercase text-[11px] mono-num">⚡ Endless Difficulty Mode</span><span id="diffCurrentLabel" class="text-[10px] mono-num text-emerald-400 font-bold">🟢 Assisted Easy</span></div>
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+<button type="button" onclick="setDifficulty('easy')" id="diffBtn_easy" class="py-1.5 px-2 rounded-lg text-[11px] font-bold bg-emerald-500 text-black cursor-pointer">🟢 Easy (Fast Fill)</button>
+<button type="button" onclick="setDifficulty('normal')" id="diffBtn_normal" class="py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer">🔵 Normal (1.2x)</button>
+<button type="button" onclick="setDifficulty('hard')" id="diffBtn_hard" class="py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer">🟠 Overdrive (1.5x)</button>
+<button type="button" onclick="setDifficulty('void')" id="diffBtn_void" class="py-1.5 px-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer">🔮 Void Max (2.0x)</button>
+</div>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="flex items-center justify-between gap-2"><span class="font-bold text-white uppercase text-[11px] mono-num">🏎️ Interceptor Vehicle Livery</span><span id="liveryAccessHint" class="text-[10px] mono-num text-cyan-300 font-bold">Active Livery</span></div>
+<div id="vehicleLiveryGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-1.5"></div>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="flex items-center justify-between gap-2">
+<div><span class="font-bold text-white uppercase text-[11px] mono-num">🌍 Dimension Selector (Unlocks Every 10 Epochs)</span><p class="text-[10px] text-gray-400">Auto-Cycle shifts dimensions every 10 Epochs. Ep 250 unlocks after surviving Ep 250.</p></div>
+<button type="button" id="autoBiomeToggleBtn" onclick="toggleAutoBiomeCycle()" class="px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] mono-num font-bold cursor-pointer shrink-0">🔄 Auto-Cycle: ON</button>
+</div>
+<div id="biomeGridSelector" class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-28 overflow-y-auto pr-1"></div>
+</div>
+</div>
+<div id="setTab_sounds" class="hidden space-y-2.5">
+<div class="flex items-center justify-between px-1">
+<span class="text-[10px] mono-num uppercase text-gray-400 font-bold">Audio Mixer &amp; Custom Soundtrack</span>
+<button type="button" onclick="resetSoundSettingsOnly()" class="px-2.5 py-1 rounded-lg bg-[#171c28] hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] mono-num font-bold cursor-pointer">↺ Reset Audio</button>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="flex items-center justify-between"><span class="font-bold text-white uppercase text-[11px] mono-num">🎵 Soundtrack Selection (Auto-Loops)</span><span id="ostLockStatus" class="text-[10px] mono-num text-sky-400">Cyber-Synth Active</span></div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+<button type="button" id="ostBtn_synth" onclick="selectOstMode('synth')" class="p-2 rounded-xl text-left border bg-sky-500/20 border-sky-400 text-white cursor-pointer"><div class="font-bold text-xs">🎹 Cyber-Synth</div><div class="text-[9.5px] text-gray-300 mt-0.5">128 BPM Synthwave</div></button>
+<button type="button" id="ostBtn_mitadru" onclick="selectOstMode('mitadru')" class="p-2 rounded-xl text-left border bg-[#141824] border-[#262f45] text-gray-300 cursor-pointer"><div class="font-bold text-xs flex items-center justify-between"><span>🎧 Mitadru.m4a</span><span id="mitadruOstBadge" class="px-1 py-0.5 text-[8px] mono-num rounded bg-purple-500/20 text-purple-300">1117</span></div><div class="text-[9.5px] text-gray-400 mt-0.5">Architect OST</div></button>
+<button type="button" id="ostBtn_custom" onclick="selectOstMode('custom')" class="p-2 rounded-xl text-left border bg-[#141824] border-[#262f45] text-gray-300 cursor-pointer"><div class="font-bold text-xs truncate" id="customOstBtnTitle">📂 Custom Song</div><div class="text-[9.5px] text-gray-400 mt-0.5 truncate" id="customOstBtnSub">No song uploaded</div></button>
+</div>
+<div class="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-[#1c2333]">
+<div class="text-[10px] text-gray-300 mono-num truncate max-w-[260px]" id="customSongStatusText">Upload Custom Song (&le; 20 MB, Auto-Loop)</div>
+<div class="flex items-center gap-1.5">
+<input type="file" id="customSongFileInput" accept="*/*" class="hidden" onchange="handleCustomSongUpload(this.files)">
+<button type="button" onclick="document.getElementById('customSongFileInput').click()" class="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[10px] mono-num font-bold cursor-pointer">📤 Upload Song</button>
+<button type="button" id="removeMyCustomSongBtn" onclick="removeCurrentPilotCustomSong()" class="hidden px-2.5 py-1 rounded-lg bg-red-600/80 hover:bg-red-500 text-white text-[10px] mono-num font-bold cursor-pointer">🗑️ Remove</button>
+</div>
+</div>
+</div>
+<div id="volumeSlidersGrid" class="recessed-well p-2.5 sm:p-3 rounded-xl grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 mono-num"></div>
+</div>
+<div id="setTab_controls" class="hidden space-y-2.5">
+<div class="flex items-center justify-between px-1">
+<span id="ctrlPlatformHeaderLabel" class="text-[10px] mono-num uppercase text-gray-400 font-bold">Platform Controls</span>
+<button type="button" onclick="resetControlSettingsOnly()" class="px-2.5 py-1 rounded-lg bg-[#171c28] hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] mono-num font-bold cursor-pointer">↺ Reset Controls</button>
+</div>
+<div class="mobile-only-ui recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="font-bold text-white uppercase text-[11px] mono-num">📱 Steering Mode</div>
+<div class="grid grid-cols-3 gap-1.5">
+<button type="button" id="mobCtrl_buttons" onclick="setMobileControlMode('buttons')" class="p-2 rounded-lg text-[11px] font-bold bg-sky-500 text-black cursor-pointer text-center">◀▶ Arrow Paddles</button>
+<button type="button" id="mobCtrl_drag" onclick="setMobileControlMode('drag')" class="p-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer text-center">👆 Finger Drag</button>
+<button type="button" id="mobCtrl_tilt" onclick="setMobileControlMode('tilt')" class="p-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer text-center">📲 Phone Tilt (Gyro)</button>
+</div>
+<div id="gyroCalibrationBox" class="p-2.5 rounded-lg bg-[#0d111a] border border-[#1f273a] space-y-2 opacity-40 pointer-events-none transition">
+<div class="flex flex-wrap items-center justify-between gap-2">
+<div class="flex items-center gap-2"><span class="text-[10px] mono-num text-gray-300">TILT ANGLE:</span><span id="gyroLiveAngleLabel" class="px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 text-[10px] mono-num font-bold">0.0°</span></div>
+<div class="flex items-center gap-1.5">
+<button type="button" id="invertGyroBtn" onclick="toggleInvertGyro()" class="px-2 py-1 rounded bg-[#182032] hover:bg-[#232f47] text-gray-200 border border-gray-600/40 text-[10px] mono-num font-bold cursor-pointer">⇄ Flip Axis: OFF</button>
+<button type="button" id="calibrateTiltBtn" onclick="calibrateTiltSensor()" class="px-2.5 py-1 rounded bg-sky-500 hover:bg-sky-400 text-black text-[10px] mono-num font-extrabold cursor-pointer">🧭 Calibrate Center</button>
+</div>
+</div>
+<div class="pt-1 border-t border-[#182030] mono-num">
+<div class="flex justify-between text-[10.5px]"><span class="text-gray-300">📲 Gyro Speed / Sensitivity</span><span id="gyroSpeedLabel" class="text-sky-400 font-bold">45% (Smooth)</span></div>
+<input type="range" id="gyroSpeedSlider" min="20" max="100" value="45" oninput="updateGyroSpeedSetting(this.value)" class="w-full accent-sky-400 cursor-pointer mt-0.5">
+</div>
+</div>
+<div class="p-2 rounded-lg bg-[#0c0f17] border border-[#1c2333] space-y-1 text-[10px] mono-num">
+<div class="text-sky-300 font-bold uppercase" id="mobileModeMapTitle">ACTIVE CONTROL MAP // ARROW PADDLES</div>
+<div class="grid grid-cols-2 gap-x-3 gap-y-1 text-gray-300">
+<div>↔️ STEER: <strong id="mapSteerDesc" class="text-white">Left ◀ / ▶ Right Dock</strong></div>
+<div>🛑 BRAKE: <strong class="text-red-300">🛑 BRAKE Dock (Right)</strong></div>
+<div>🔥 NITRO: <strong class="text-amber-300">🔥 NITRO Dock / 2x Tap</strong></div>
+<div>⚡ EMP: <strong class="text-sky-300">⚡ EMP Dock (Right)</strong></div>
+</div>
+</div>
+<div class="flex items-center justify-between pt-1 border-t border-[#1b2230] text-[11px]">
+<span class="text-gray-300">Double-Tap Road for Nitro Boost:</span>
+<button type="button" id="doubleTapNitroBtn" onclick="toggleDoubleTapNitro()" class="px-3 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] mono-num font-bold cursor-pointer">ENABLED</button>
+</div>
+</div>
+<div class="pc-only-ui recessed-well p-2.5 sm:p-3 rounded-xl space-y-2.5">
+<div class="flex items-center justify-between"><span class="font-bold text-white uppercase text-[11px] mono-num">⌨️ PC Keyboard Remapper (Click Box to Rebind)</span><span class="text-[10px] mono-num text-gray-400">ESC = Pause / Back</span></div>
+<div id="pcKeybindGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mono-num text-[11px]"></div>
+</div>
+</div>
+<div id="setTab_graphics" class="hidden space-y-2.5">
+<div class="flex items-center justify-between px-1">
+<span id="gfxHardwareScanLabel" class="text-[10px] mono-num uppercase text-emerald-400 font-bold">Hardware Scan: Ready</span>
+<button type="button" onclick="resetGraphicsSettingsOnly()" class="px-2.5 py-1 rounded-lg bg-[#171c28] hover:bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] mono-num font-bold cursor-pointer">↺ Reset Graphics</button>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="flex items-center justify-between"><span class="font-bold text-white uppercase text-[11px] mono-num">🚀 Graphics Quality Preset</span><span id="gfxPresetActiveLabel" class="text-[10px] mono-num text-sky-400 font-bold">HIGH</span></div>
+<div id="gfxPresetButtonsGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-1.5"></div>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2 mono-num">
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+<div><div class="flex justify-between text-[10.5px]"><span class="text-gray-300">🔍 Render Scale</span><span id="gfxResLabel" class="text-emerald-400 font-bold">1.25x</span></div><input type="range" id="gfxResSlider" min="60" max="150" step="5" value="125" oninput="updateGfxResolution(this.value)" class="w-full accent-emerald-400 cursor-pointer"></div>
+<div><div class="flex justify-between text-[10.5px]"><span class="text-gray-300">🛣️ Draw Distance</span><span id="gfxSlicesLabel" class="text-sky-400 font-bold">36 Seg</span></div><input type="range" id="gfxSlicesSlider" min="16" max="48" step="2" value="36" oninput="updateGfxDrawSlices(this.value)" class="w-full accent-sky-400 cursor-pointer"></div>
+<div><div class="flex justify-between text-[10.5px]"><span class="text-gray-300">✨ Weather &amp; Stars</span><span id="gfxParticleLabel" class="text-purple-400 font-bold">100%</span></div><input type="range" id="gfxParticleSlider" min="0" max="150" step="5" value="100" oninput="updateGfxParticles(this.value)" class="w-full accent-purple-400 cursor-pointer"></div>
+</div>
+<div id="gfxTogglesGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-1"></div>
+</div>
+<div class="recessed-well p-2.5 sm:p-3 rounded-xl space-y-2">
+<div class="font-bold text-white uppercase text-[11px] mono-num">🎬 Optic Color Grade</div>
+<div id="gfxFilterButtonsGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-1.5"></div>
+</div>
+</div>
+<div id="setTab_dev" class="hidden space-y-2.5">
+<div class="recessed-well p-3 rounded-xl border border-cyan-500/40 space-y-2.5">
+<div class="flex items-center justify-between border-b border-[#1f293d] pb-1.5">
+<div><div class="text-xs font-extrabold text-cyan-300 mono-num uppercase">👑 ARCHITECT VOID // DEV OVERRIDE CONSOLE (ID 1117)</div><p class="text-[10px] text-gray-400">Root controls for Dimensions, Accounts, Votes &amp; Custom Songs</p></div>
+<span class="px-2 py-0.5 text-[9px] mono-num font-bold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/40">ROOT 1117</span>
+</div>
+<div class="flex flex-wrap items-center justify-between gap-2 bg-[#0c1018] p-2 rounded-lg border border-[#1d2638]">
+<div><div class="text-[11px] font-bold text-white mono-num">🚀 Warp / Start at Any Epoch</div><p class="text-[10px] text-gray-400">Type 249 (tests 3s Red Klaxon) or 250 (Cosmic Singularity):</p></div>
+<div class="flex items-center gap-1.5">
+<input type="number" id="devEpochInput" min="1" max="99999" placeholder="250" class="bg-[#07090e] border border-cyan-500/50 rounded-lg px-2 py-1 text-xs mono-num text-white w-20 text-center focus:outline-none">
+<button type="button" onclick="devStartAtCustomEpoch()" class="px-3 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black font-extrabold text-xs cursor-pointer">▶ Warp</button>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+<button type="button" id="devToggleDimsBtn" onclick="devToggleAllDimensionsLock()" class="p-2 rounded-xl bg-amber-950/70 hover:bg-amber-800/80 text-amber-200 border border-amber-500/40 text-[10.5px] mono-num font-bold cursor-pointer text-center">🔒 Relock All Dimensions</button>
+<button type="button" onclick="adminDeleteAllGuestAccounts()" class="p-2 rounded-xl bg-amber-950/80 hover:bg-amber-800 text-amber-200 border border-amber-500/50 text-[10.5px] mono-num font-bold cursor-pointer text-center">🧹 Delete All Guest Accounts</button>
+<button type="button" onclick="adminResetAllLeaderboardScores()" class="p-2 rounded-xl bg-red-950/80 hover:bg-red-800 text-red-200 border border-red-500/50 text-[10.5px] mono-num font-bold cursor-pointer text-center">🗑️ Reset All Scores (Incl. Core)</button>
+</div>
+<div class="bg-[#0c1018] p-2 rounded-lg border border-[#1d2638] space-y-1.5">
+<div class="flex items-center justify-between"><span class="text-[10.5px] font-bold text-cyan-300 mono-num uppercase">🎵 Custom Uploaded Songs Manager</span><button type="button" onclick="devRemoveAllCustomSongs()" class="px-2 py-0.5 rounded bg-red-600/80 hover:bg-red-500 text-white text-[9.5px] mono-num font-bold cursor-pointer">🗑️ Remove All Custom Songs</button></div>
+<div id="devCustomSongsList" class="space-y-1 max-h-20 overflow-y-auto text-[10px] mono-num text-gray-400"></div>
+</div>
+<div id="devConsoleFeedback" class="hidden text-[10.5px] mono-num text-cyan-300 font-bold px-2 py-1 rounded bg-cyan-950/50 border border-cyan-500/30"></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div id="leaderboardModal" style="display:none;" class="absolute inset-0 bg-black/85 z-[75] flex items-center justify-center p-2 sm:p-4">
+<div class="hardware-panel modal-anim w-full max-w-xl rounded-2xl border border-[#2e384e] shadow-2xl flex flex-col max-h-[92%] overflow-hidden">
+<div class="px-4 py-2.5 bg-[#0c0f16] border-b border-[#232836] flex items-center justify-between gap-2 shrink-0">
+<div><div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0 shadow-[0_0_8px_#34d399]"></span><h2 class="text-xs sm:text-sm font-bold text-white uppercase tracking-wider">🏆 GLOBAL REAL-TIME LEADERBOARD</h2></div><p id="lbSyncStatusText" class="text-[10px] mono-num text-amber-300 font-semibold mt-0.5">Blazing-Fast Real-Time Sync &bull; Verified Standings</p></div>
+<button type="button" onclick="closeLeaderboardModal()" class="px-3.5 py-1.5 rounded-lg bg-[#1f2738] hover:bg-[#2b354b] text-white border border-gray-600/40 text-xs font-bold cursor-pointer">← Back</button>
+</div>
+<div id="leaderboardListContainer" class="flex-1 p-3 overflow-y-auto space-y-2"></div>
+</div>
+</div>
+<header class="absolute top-0 inset-x-0 z-30 p-2 sm:p-2.5 pointer-events-none">
+<div class="max-w-7xl mx-auto flex items-center justify-between gap-1.5">
+<div class="hud-collapsible hardware-panel px-2.5 py-1 rounded-xl flex items-center gap-1.5 sm:gap-2 pointer-events-auto">
+<div class="flex items-center gap-1"><span id="hudPilotDot" class="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span><span id="hudPilotCallsign" class="text-[9.5px] sm:text-[11px] font-bold text-white tracking-tight truncate max-w-[68px] sm:max-w-[120px]">GUEST</span></div>
+<div class="recessed-well px-1.5 py-0.5 rounded-lg mono-num text-[10px] sm:text-[11px]"><strong id="hudScore" class="text-emerald-400">000000</strong></div>
+<div class="recessed-well px-1.5 py-0.5 rounded-lg mono-num text-[9.5px] sm:text-[11px]"><span id="hudEpoch" class="text-sky-300 font-bold">EP 1</span></div>
+<div class="recessed-well px-1.5 py-0.5 rounded-lg mono-num text-[9.5px] sm:text-[11px]"><span id="hudCombo" class="text-amber-300 font-bold">1.0x</span></div>
+<div class="flex items-center gap-1 recessed-well px-1.5 py-0.5 rounded-lg"><span class="text-[8px] sm:text-[9px] mono-num text-gray-400">HULL</span><div class="w-9 sm:w-14 h-1.5 bg-[#1a202c] rounded-full overflow-hidden"><div id="hudArmorBar" class="h-full bg-emerald-400" style="width:100%;"></div></div><span id="hudArmorPct" class="text-[9px] sm:text-[10px] mono-num font-bold text-emerald-400">100%</span></div>
+</div>
+<div class="hud-collapsible hardware-panel px-2.5 sm:px-3 py-1 rounded-xl flex items-center gap-1.5 sm:gap-2 pointer-events-auto text-[9.5px] sm:text-[11px] mono-num">
+<span id="hudBiomeName" class="text-sky-300 font-bold truncate max-w-[90px] sm:max-w-none">🌌 Cyber Void</span><span class="text-gray-600">|</span><span id="hudWarningBadge" class="px-1.5 py-0.5 rounded text-[8.5px] sm:text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-700">CLEAR</span><span class="hidden md:inline text-gray-600">|</span><span class="hidden md:inline text-amber-300">👑 <strong id="hudLeaderMini">Unclaimed</strong></span>
+</div>
+<div class="flex items-center gap-1.5 pointer-events-auto">
+<div class="pc-only-ui hud-collapsible hardware-panel px-2.5 py-1 rounded-xl flex items-center gap-2">
+<div class="flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg recessed-well"><div class="flex items-end gap-0.5 h-3"><span class="eq-bar w-1 bg-emerald-400 eq-1 eq-paused rounded-full"></span><span class="eq-bar w-1 bg-sky-400 eq-2 eq-paused rounded-full"></span><span class="eq-bar w-1 bg-amber-400 eq-3 eq-paused rounded-full"></span></div><span id="hudOstShortLabel" class="mono-num text-[9px] text-gray-300">SYNTH</span></div>
+<span id="pcHideUiHintBadge" class="px-2 py-0.5 rounded-lg recessed-well text-[10px] mono-num text-gray-400">[H] UI &bull; [ESC] Menu</span>
+</div>
+<div id="mobileTopRightPill" class="mobile-only-ui hardware-panel p-1 rounded-xl flex items-center gap-1.5">
+<button type="button" id="mobilePauseBtn" onclick="openPauseSettingsModal('game')" class="px-3 py-1.5 rounded-lg bg-[#142030] border border-sky-400/50 text-[11px] font-extrabold text-sky-200 active:scale-95 transition cursor-pointer">⏸ Pause</button>
+<button type="button" id="mobileHideUiBtn" onclick="toggleGameHudVisibility()" class="px-3 py-1.5 rounded-lg bg-[#1e1533] border border-purple-400/60 text-[11px] mono-num font-extrabold text-purple-200 active:scale-95 transition cursor-pointer shadow-lg">👁️ UI</button>
+</div>
+</div>
+</div>
+</header>
+<div class="hud-collapsible absolute top-13 sm:top-14 left-2 sm:left-3 z-20 pointer-events-none flex flex-col gap-1.5">
+<div class="hardware-panel p-1.5 rounded-2xl flex flex-col items-center w-20 sm:w-24">
+<div class="w-full flex items-center justify-between px-1 mb-0.5"><span class="text-[7.5px] mono-num font-bold text-gray-400">RADAR</span><span id="hudSpeedKmh" class="text-[8.5px] mono-num font-bold text-emerald-400">100 km/h</span></div>
+<div class="recessed-well rounded-xl overflow-hidden w-16 h-16 sm:w-20 sm:h-20 flex items-center justify-center"><canvas id="miniRadarCanvas" width="80" height="80" class="w-full h-full"></canvas></div>
+</div>
+<div class="hardware-panel px-2 py-1.5 rounded-xl flex flex-col gap-1 w-20 sm:w-24 pointer-events-auto">
+<div><div class="flex items-center justify-between text-[8px] mono-num"><span class="text-amber-300 font-bold">🔥 NITRO</span><span id="hudNitroPct" class="text-amber-300 font-bold">100%</span></div><div class="w-full h-1.5 bg-[#090b10] rounded-full overflow-hidden mt-0.5"><div id="hudNitroBar" class="h-full bg-amber-400" style="width:100%;"></div></div></div>
+<div><div class="flex items-center justify-between text-[8px] mono-num"><span class="text-sky-300 font-bold">⚡ EMP</span><span id="hudEmpPct" class="text-sky-300 font-bold">100%</span></div><div class="w-full h-1.5 bg-[#090b10] rounded-full overflow-hidden mt-0.5"><div id="hudEmpBar" class="h-full bg-sky-400" style="width:100%;"></div></div></div>
+<button type="button" id="hudDevRefillBtn" onpointerdown="devRefillAllSystems()" class="hidden mt-0.5 py-1 px-1 rounded-lg bg-cyan-500/25 hover:bg-cyan-400/40 active:scale-95 text-cyan-200 border border-cyan-400/60 text-[8px] mono-num font-extrabold uppercase tracking-tight transition cursor-pointer text-center shadow-[0_0_10px_rgba(0,245,212,0.3)]">⚡ MAX ALL [R]</button>
+</div>
+</div>
+<footer class="absolute bottom-0 inset-x-0 z-30 px-2.5 pb-2.5 pt-1 sm:p-3 pointer-events-none flex items-end justify-between gap-2">
+<div id="mobileLeftTouchGroup" class="mobile-only-ui hardware-panel p-1.5 rounded-2xl flex items-center gap-2 pointer-events-auto">
+<button type="button" id="btnLeftLane" onpointerdown="steerLane(-1);this.classList.add('active-press')" onpointerup="this.classList.remove('active-press')" onpointerleave="this.classList.remove('active-press')" class="touch-paddle min-w-[64px] min-h-[50px] px-4 py-2 rounded-xl flex flex-col items-center justify-center text-white cursor-pointer"><span class="text-lg leading-none font-black text-sky-300">◀</span><span class="text-[8.5px] mono-num font-extrabold text-gray-200 mt-1">LEFT</span></button>
+<button type="button" id="btnRightLane" onpointerdown="steerLane(1);this.classList.add('active-press')" onpointerup="this.classList.remove('active-press')" onpointerleave="this.classList.remove('active-press')" class="touch-paddle min-w-[64px] min-h-[50px] px-4 py-2 rounded-xl flex flex-col items-center justify-center text-white cursor-pointer"><span class="text-lg leading-none font-black text-sky-300">▶</span><span class="text-[8.5px] mono-num font-extrabold text-gray-200 mt-1">RIGHT</span></button>
+</div>
+<div class="hud-collapsible flex hardware-panel px-3 sm:px-3.5 py-1.5 rounded-xl items-center gap-2 sm:gap-3 text-[9.5px] sm:text-[11px] mono-num mx-auto">
+<span>LEAD: <strong id="hudLeadName" class="text-white">CLEAR</strong></span><span class="text-gray-600">|</span><span>TTC: <strong id="hudLeadTtc" class="text-emerald-400">STABLE</strong></span><span class="text-gray-600">|</span><span>DGI: <strong id="hudLeadDgi" class="text-sky-300">0.00</strong></span>
+</div>
+<div id="mobileRightTouchGroup" class="mobile-only-ui hardware-panel p-1.5 rounded-2xl flex items-center gap-2 pointer-events-auto">
+<button type="button" id="btnBrake" onpointerdown="setBraking(true);this.classList.add('active-press')" onpointerup="setBraking(false);this.classList.remove('active-press')" onpointerleave="setBraking(false);this.classList.remove('active-press')" class="touch-paddle min-w-[58px] min-h-[50px] px-3 py-2 rounded-xl flex flex-col items-center justify-center border-red-500/45 cursor-pointer"><span class="text-sm leading-none font-extrabold text-red-400">🛑</span><span class="text-[8.5px] mono-num font-extrabold text-red-200 mt-1">BRAKE</span></button>
+<button type="button" id="btnBoost" onpointerdown="setBoosting(true);this.classList.add('active-press')" onpointerup="setBoosting(false);this.classList.remove('active-press')" onpointerleave="setBoosting(false);this.classList.remove('active-press')" class="touch-paddle min-w-[58px] min-h-[50px] px-3 py-2 rounded-xl flex flex-col items-center justify-center border-amber-400/55 bg-amber-500/15 cursor-pointer"><span class="text-sm leading-none font-extrabold text-amber-300">🔥</span><span class="text-[8.5px] mono-num font-extrabold text-amber-200 mt-1">NITRO</span></button>
+<button type="button" id="btnEmpPulse" onpointerdown="triggerNeuralEmp()" class="touch-paddle min-w-[58px] min-h-[50px] px-3 py-2 rounded-xl flex flex-col items-center justify-center border-sky-400/65 bg-sky-500/20 cursor-pointer"><span class="text-sm leading-none font-black text-sky-300">⚡</span><span class="text-[8.5px] mono-num font-extrabold text-sky-200 mt-1">EMP</span></button>
+</div>
+</footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
