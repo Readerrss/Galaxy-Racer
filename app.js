@@ -1690,6 +1690,565 @@ function setVisualFilter(fc,shouldSave=true){
 }
 // ==================== END OF CHUNK 4 OF 6 ====================
 // ==================== START OF CHUNK 5 OF 6 ====================
+let isPortalExiting=false;
+const CLOUD_SYNC_URL_V10='https://ntfy.sh/roadsense_overdrive_global_lb_sync_v10';
+const CLEAN_SLATE_KEY_V10='roadSense_overdrive_clean_slate_v10';
+
+// One-time cleanup to wipe out the old false/cached scores & phantom flashes from v8
+(function enforceCleanSlateV10(){
+    if(localStorage.getItem(CLEAN_SLATE_KEY_V10)!=='true'){
+        localStorage.removeItem(ACCOUNTS_DB_KEY);
+        localStorage.removeItem(LB_STORAGE_KEY);
+        localStorage.removeItem(DELETED_ACCOUNTS_KEY);
+        lastCloudResetTs=Date.now();
+        localStorage.setItem('roadSense_overdrive_resetTs_v8',String(lastCloudResetTs));
+        localStorage.setItem(CLEAN_SLATE_KEY_V10,'true');
+    }
+})();
+
+// Glitch-proof DOM text & bar updater
+function setTextCached(id,val){
+    const strVal=String(val);
+    domCache[id]=strVal;
+    const el=document.getElementById(id);
+    if(el&&el.innerText!==strVal)el.innerText=strVal;
+}
+function setStyleWidthCached(id,wStr){
+    const k=id+'_w';
+    domCache[k]=wStr;
+    const el=document.getElementById(id);
+    if(el&&el.style.width!==wStr)el.style.width=wStr;
+}
+
+// Match Core Pilot by 4-digit ID or typed name (Mitadru/Void, Ritam, Meraj, Sourajita, Debankita)
+function resolveCorePilotFromInputs(rawIdStr,rawNameStr){
+    const cleanId=(rawIdStr||"").trim();
+    if(PILOT_PROFILES[cleanId]&&cleanId!=="GUEST")return cleanId;
+    const cleanName=(rawNameStr||"").trim().toLowerCase();
+    if(!cleanName)return null;
+    if(cleanName==="1117"||cleanName.includes("mitadru")||cleanName==="void")return "1117";
+    if(cleanName==="1183"||cleanName.includes("ritam"))return "1183";
+    if(cleanName==="1134"||cleanName.includes("meraj"))return "1134";
+    if(cleanName==="1075"||cleanName.includes("sourajita"))return "1075";
+    if(cleanName==="1174"||cleanName.includes("debankita"))return "1174";
+    return null;
+}
+
+// Never allow Core Pilot IDs to be added to deleted accounts
+function sanitizeDeletedAccountKeys(){
+    const raw=getDeletedAccountKeys();
+    const cleaned=(Array.isArray(raw)?raw:[]).filter(k=>k&&!CORE_IDS.has(String(k)));
+    if(cleaned.length!==raw.length)saveDeletedAccountKeys(cleaned);
+    return cleaned;
+}
+
+function getActiveAccountStorageKey(){
+    if(currentPilot&&currentPilot.isCore)return currentPilot.id;
+    return `GUEST_ID_${ensureGuestHas4DigitId()}`;
+}
+
+function normalizeEntryAccountKey(entry){
+    if(!entry)return "";
+    const idStr=String(entry.id||"");
+    const accStr=String(entry.accountKey||"");
+    if(CORE_IDS.has(idStr))return idStr;
+    if(CORE_IDS.has(accStr))return accStr;
+    const matchedCore=resolveCorePilotFromInputs(idStr,entry.name);
+    if(matchedCore)return matchedCore;
+    if(accStr.startsWith("GUEST_ID_"))return accStr;
+    if(entry.guestId&&/^\d{4}$/.test(String(entry.guestId)))return `GUEST_ID_${entry.guestId}`;
+    const m=String(entry.name||"").match(/#(\d{4})/);
+    if(m)return `GUEST_ID_${m[1]}`;
+    return accStr||`GUEST_ID_${ensureGuestHas4DigitId()}`;
+}
+
+// Syncs Personal Best DB and Leaderboard DB while respecting resets (never invents false scores)
+function reconcileAllPilotScores(){
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    const db=getAccountsDatabase();
+    let rawLb=[];
+    try{rawLb=JSON.parse(localStorage.getItem(LB_STORAGE_KEY)||'[]');}catch(e){rawLb=[];}
+    if(!Array.isArray(rawLb))rawLb=[];
+
+    const lbMap=new Map();
+
+    // 1. Fold valid leaderboard entries (ignoring any entry older than lastCloudResetTs)
+    rawLb.forEach(item=>{
+        if(!item)return;
+        const sc=Number(item.score)||0;
+        const itemTs=Number(item.ts)||0;
+        if(sc<=0)return;
+        if(lastCloudResetTs&&itemTs>0&&itemTs<lastCloudResetTs)return;
+        const k=normalizeEntryAccountKey(item);
+        if(!k||delSet.has(k))return;
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const gid=isCore?"":(item.guestId||extractGuestIdTag(item));
+        const canonicalName=isCore?prof.name:(item.name||'Guest Pilot');
+        const ep=Math.max(1,Number(item.epoch)||1);
+        const prev=lbMap.get(k);
+        if(!prev||sc>prev.score||(sc===prev.score&&ep>prev.epoch)){
+            lbMap.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(gid==='GUEST'?'':gid),
+                accountKey:k,
+                name:canonicalName,
+                score:Math.max(sc,prev?prev.score:0),
+                epoch:Math.max(ep,prev?prev.epoch:1),
+                ts:Math.max(itemTs,prev?prev.ts:0)||Date.now()
+            });
+        }
+    });
+
+    // 2. Sync Account DB <-> Leaderboard (always keeping the true highest score after reset)
+    let dbChanged=false;
+    Object.keys(db).forEach(rawKey=>{
+        const rec=db[rawKey];
+        if(!rec)return;
+        if(lastCloudResetTs&&rec.updatedAt&&Number(rec.updatedAt)<lastCloudResetTs){
+            delete db[rawKey];
+            dbChanged=true;
+            return;
+        }
+        const k=CORE_IDS.has(rawKey)?rawKey:(resolveCorePilotFromInputs(rawKey,rec.name)||rawKey);
+        if(delSet.has(k))return;
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const dbScore=Math.max(0,Number(rec.bestScore)||0);
+        const dbEpoch=Math.max(1,Number(rec.bestEpoch)||1);
+        const lbEntry=lbMap.get(k);
+        const maxScore=Math.max(dbScore,lbEntry?lbEntry.score:0);
+        const maxEpoch=maxScore>0?Math.max(dbEpoch,lbEntry?lbEntry.epoch:1):1;
+
+        if(maxScore!==dbScore||maxEpoch!==dbEpoch||k!==rawKey){
+            db[k]={
+                ...rec,
+                id:isCore?k:k,
+                guestId:isCore?"":(rec.guestId||k.replace('GUEST_ID_','')),
+                name:isCore?prof.name:(rec.name||`Pilot #${k.replace('GUEST_ID_','')}`),
+                isCore,
+                bestScore:maxScore,
+                bestEpoch:maxEpoch,
+                totalFlashes:Math.max(0,Number(rec.totalFlashes)||0),
+                completedEpoch250:Boolean(rec.completedEpoch250||maxEpoch>250),
+                updatedAt:rec.updatedAt||Date.now()
+            };
+            if(k!==rawKey)delete db[rawKey];
+            dbChanged=true;
+        }
+        if(maxScore>0){
+            lbMap.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(db[k].guestId||k.replace('GUEST_ID_','')),
+                accountKey:k,
+                name:isCore?prof.name:(db[k].name||'Guest Pilot'),
+                score:maxScore,
+                epoch:maxEpoch,
+                ts:lbEntry?lbEntry.ts:(db[k].updatedAt||Date.now())
+            });
+        }
+    });
+
+    // 3. Ensure every valid leaderboard entry is reflected in Account DB
+    lbMap.forEach((entry,k)=>{
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const prev=db[k]||{bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false};
+        if((Number(prev.bestScore)||0)<entry.score||(Number(prev.bestEpoch)||1)<entry.epoch){
+            db[k]={
+                id:isCore?k:k,
+                guestId:isCore?"":(entry.guestId||k.replace('GUEST_ID_','')),
+                name:isCore?prof.name:(entry.name||prev.name||'Guest Pilot'),
+                isCore,
+                bestScore:Math.max(Number(prev.bestScore)||0,entry.score),
+                bestEpoch:Math.max(Number(prev.bestEpoch)||1,entry.epoch),
+                totalFlashes:Math.max(0,Number(prev.totalFlashes)||0),
+                completedEpoch250:Boolean(prev.completedEpoch250||entry.epoch>250),
+                updatedAt:entry.ts||Date.now()
+            };
+            dbChanged=true;
+        }
+    });
+
+    if(dbChanged)saveAccountsDatabase(db);
+    const sorted=Array.from(lbMap.values()).sort((a,b)=>b.score-a.score).slice(0,100);
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(sorted));
+    updateTopLeaderBanner(sorted);
+    return sorted;
+}
+
+function getLocalLeaderboard(){
+    return reconcileAllPilotScores();
+}
+
+function saveLocalLeaderboard(list){
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    const valid=(Array.isArray(list)?list:[])
+        .filter(e=>e&&(Number(e.score)||0)>0&&!delSet.has(normalizeEntryAccountKey(e)))
+        .sort((a,b)=>b.score-a.score)
+        .slice(0,100);
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(valid));
+    return reconcileAllPilotScores();
+}
+
+function getActiveAccountStats(){
+    reconcileAllPilotScores();
+    const db=getAccountsDatabase();
+    const key=getActiveAccountStorageKey();
+    const rec=db[key];
+    if(!rec){
+        return {bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false};
+    }
+    const bs=Math.max(0,Number(rec.bestScore)||0);
+    const be=bs>0?Math.max(1,Number(rec.bestEpoch)||1):Math.max(1,Number(rec.bestEpoch)||1);
+    const tf=Math.max(0,Number(rec.totalFlashes)||0);
+    return {
+        bestScore:bs,
+        bestEpoch:be,
+        totalFlashes:tf,
+        completedEpoch250:Boolean(rec.completedEpoch250||be>250)
+    };
+}
+
+function saveActiveAccountStats(scoreVal,epochVal,flashesVal){
+    const key=getActiveAccountStorageKey();
+    if(!CORE_IDS.has(key)){
+        saveDeletedAccountKeys(sanitizeDeletedAccountKeys().filter(k=>k!==key));
+    }
+    const db=getAccountsDatabase();
+    const prev=db[key]||{bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false};
+    const dispName=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
+    const cleanScore=Math.max(0,Math.round(Number(scoreVal)||0));
+    const cleanEpoch=Math.max(1,Math.round(Number(epochVal)||1));
+    const cleanFlashes=Math.max(0,Math.round(Number(flashesVal)||0));
+    const newBestScore=Math.max(Number(prev.bestScore)||0,cleanScore);
+    const newBestEpoch=Math.max(Number(prev.bestEpoch)||1,cleanEpoch);
+
+    db[key]={
+        id:currentPilot.isCore?currentPilot.id:key,
+        guestId:currentPilot.isCore?"":ensureGuestHas4DigitId(),
+        name:dispName,
+        isCore:Boolean(currentPilot.isCore),
+        bestScore:newBestScore,
+        bestEpoch:newBestEpoch,
+        totalFlashes:(Number(prev.totalFlashes)||0)+cleanFlashes,
+        completedEpoch250:Boolean(prev.completedEpoch250||newBestEpoch>250),
+        updatedAt:Date.now()
+    };
+    saveAccountsDatabase(db);
+    reconcileAllPilotScores();
+    refreshAccountStatsUI();
+}
+
+function recordScoreToLeaderboard(scoreVal,epochVal,pushRemote=true){
+    const accountKey=getActiveAccountStorageKey();
+    const pid=currentPilot.isCore?currentPilot.id:'GUEST';
+    const gid=currentPilot.isCore?'':ensureGuestHas4DigitId();
+    const pName=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
+
+    if(!CORE_IDS.has(accountKey)){
+        saveDeletedAccountKeys(sanitizeDeletedAccountKeys().filter(k=>k!==accountKey));
+    }
+
+    const st=getActiveAccountStats();
+    const effectiveScore=Math.max(Math.round(Number(scoreVal)||0),st.bestScore||0);
+    const effectiveEpoch=Math.max(Math.round(Number(epochVal)||1),st.bestEpoch||1);
+    if(effectiveScore<=0)return;
+
+    const nowTs=Date.now();
+    const list=getLocalLeaderboard();
+    const idx=list.findIndex(e=>normalizeEntryAccountKey(e)===accountKey);
+    if(idx>=0){
+        list[idx].score=Math.max(Number(list[idx].score)||0,effectiveScore);
+        list[idx].epoch=Math.max(Number(list[idx].epoch)||1,effectiveEpoch);
+        list[idx].name=pName;
+        list[idx].id=pid;
+        list[idx].guestId=gid;
+        list[idx].accountKey=accountKey;
+        list[idx].ts=nowTs;
+    }else{
+        list.push({id:pid,guestId:gid,accountKey,name:pName,score:effectiveScore,epoch:effectiveEpoch,ts:nowTs});
+    }
+    saveLocalLeaderboard(list);
+    refreshAccountStatsUI();
+    if(pushRemote)pushCloudLeaderboardPacket();
+}
+
+// Strict reset-aware cloud packet merger (blocks old pre-reset scores from ever returning)
+function mergeRemoteLeaderboardPacket(packet){
+    if(!packet||typeof packet!=='object')return;
+
+    if(packet.resetTs&&Number(packet.resetTs)>lastCloudResetTs){
+        lastCloudResetTs=Number(packet.resetTs);
+        localStorage.setItem('roadSense_overdrive_resetTs_v8',String(lastCloudResetTs));
+        localStorage.setItem(ACCOUNTS_DB_KEY,JSON.stringify({}));
+        localStorage.setItem(LB_STORAGE_KEY,JSON.stringify([]));
+        refreshAccountStatsUI();
+        updateTopLeaderBanner([]);
+        if(document.getElementById('leaderboardModal').style.display!=='none')renderLeaderboardList();
+    }
+
+    if(Array.isArray(packet.deletedAccounts)&&packet.deletedAccounts.length>0){
+        const safeIncoming=packet.deletedAccounts.filter(k=>k&&!CORE_IDS.has(String(k)));
+        saveDeletedAccountKeys(Array.from(new Set([...sanitizeDeletedAccountKeys(),...safeIncoming])));
+    }
+
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    const mapByKey=new Map();
+    getLocalLeaderboard().forEach(item=>{
+        const k=normalizeEntryAccountKey(item);
+        if(k&&!delSet.has(k)&&item.score>0)mapByKey.set(k,item);
+    });
+
+    (Array.isArray(packet.entries)?packet.entries:[]).forEach(rem=>{
+        const remScore=Number(rem&&rem.score)||0;
+        const remTs=Number(rem&&rem.ts)||0;
+        if(remScore<=0)return;
+        // Reject any cloud score older than or missing timestamp after a reset
+        if(lastCloudResetTs&&(!remTs||remTs<=lastCloudResetTs))return;
+        const k=normalizeEntryAccountKey(rem);
+        if(!k||delSet.has(k))return;
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const ex=mapByKey.get(k);
+        const remEpoch=Math.max(1,Number(rem.epoch)||1);
+        if(!ex||remScore>ex.score){
+            mapByKey.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(rem.guestId||extractGuestIdTag(rem)),
+                accountKey:k,
+                name:isCore?prof.name:(rem.name||'Guest Pilot'),
+                score:Math.max(remScore,ex?ex.score:0),
+                epoch:Math.max(remEpoch,ex?ex.epoch:1),
+                ts:remTs||Date.now()
+            });
+        }
+    });
+
+    saveLocalLeaderboard(Array.from(mapByKey.values()));
+    refreshAccountStatsUI();
+    if(document.getElementById('leaderboardModal').style.display!=='none')renderLeaderboardList();
+}
+
+function pushCloudLeaderboardPacket(extra={}){
+    const payload={
+        type:'lb_sync_v10',
+        resetTs:lastCloudResetTs,
+        entries:getLocalLeaderboard().slice(0,35),
+        deletedAccounts:sanitizeDeletedAccountKeys(),
+        ...extra
+    };
+    if(lbChannel){try{lbChannel.postMessage(payload);}catch(e){}}
+    fetch(CLOUD_SYNC_URL_V10,{method:'POST',body:JSON.stringify(payload)}).catch(()=>{});
+}
+
+function startLiveLeaderboardStream(){
+    if(liveEventSource){
+        try{liveEventSource.close();}catch(e){}
+        liveEventSource=null;
+    }
+    if(typeof EventSource==='undefined')return;
+    try{
+        liveEventSource=new EventSource(`${CLOUD_SYNC_URL_V10}/sse`);
+        liveEventSource.onmessage=(ev)=>{
+            try{
+                const data=JSON.parse(ev.data);
+                if(data&&data.message){
+                    const pkt=JSON.parse(data.message);
+                    if(pkt&&pkt.type==='lb_sync_v10')mergeRemoteLeaderboardPacket(pkt);
+                }
+            }catch(e){}
+        };
+        liveEventSource.onerror=()=>{
+            try{liveEventSource.close();}catch(e){}
+            liveEventSource=null;
+            setTimeout(startLiveLeaderboardStream,5000);
+        };
+    }catch(e){}
+}
+
+async function pullGlobalCloudLeaderboard(){
+    if(isPullingCloud||document.hidden)return;
+    isPullingCloud=true;
+    const ctrl=new AbortController();
+    const tid=setTimeout(()=>ctrl.abort(),2800);
+    try{
+        const res=await fetch(`${CLOUD_SYNC_URL_V10}/json?poll=1&since=24h`,{signal:ctrl.signal});
+        if(res.ok){
+            const text=await res.text();
+            for(const line of text.trim().split('\n')){
+                if(!line)continue;
+                try{
+                    const w=JSON.parse(line);
+                    if(w&&w.event==='message'&&w.message){
+                        const pkt=JSON.parse(w.message);
+                        if(pkt&&pkt.type==='lb_sync_v10')mergeRemoteLeaderboardPacket(pkt);
+                    }
+                }catch(e){}
+            }
+        }
+    }catch(e){}finally{
+        clearTimeout(tid);
+        isPullingCloud=false;
+    }
+}
+
+// Leaderboard Renderer: Core Pilots NEVER show a Delete button; only Guest accounts can be individually deleted
+function renderLeaderboardList(){
+    const container=document.getElementById('leaderboardListContainer');
+    if(!container)return;
+    const list=getLocalLeaderboard();
+    const isAdmin=(currentPilot.id==='1117');
+    if(list.length===0){
+        container.innerHTML=`<div class="recessed-well p-6 rounded-xl text-center space-y-1"><div class="text-sm font-bold text-white">No Runs Recorded Yet</div><p class="text-xs text-gray-400">Complete a run to claim #1 on the Global Leaderboard!</p></div>`;
+        return;
+    }
+    const medals=["🥇 #1","🥈 #2","🥉 #3"];
+    container.innerHTML=list.map((entry,idx)=>{
+        const k=normalizeEntryAccountKey(entry);
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const accKey=k||entry.accountKey||entry.id;
+        const gTag=isCore?'':extractGuestIdTag(entry);
+        const dispName=isCore?prof.name:((gTag!=='GUEST'&&!String(entry.name).includes(`#${gTag}`))?`${entry.name} (#${gTag})`:entry.name);
+        // Remove Delete button from Core members (only show on Guest rows for Admin 1117)
+        const delBtn=(isAdmin&&!isCore)?`<button type="button" onclick="adminDeleteIndividualScore('${escapeHtml(accKey)}')" class="ml-2 px-2 py-1 rounded bg-red-600/85 hover:bg-red-500 text-white text-[9px] mono-num font-bold cursor-pointer">🗑️ Delete</button>`:'';
+        const badge=prof.isVoidChroma
+            ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-extrabold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/50">👑 ARCHITECT VOID</span>`
+            :(isCore
+                ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-bold rounded bg-white/10 text-gray-200">⚡ CORE #${k}</span>`
+                :`<span class="px-1.5 py-0.5 text-[9px] mono-num rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">👤 GUEST #${escapeHtml(gTag)}</span>`);
+        return `<div class="p-3 rounded-xl flex items-center justify-between gap-2 transition ${prof.lbClass}"><div class="flex items-center gap-2.5 min-w-0"><span class="mono-num text-xs font-black text-white px-2 py-1 rounded bg-black/40 border border-white/10 shrink-0">${medals[idx]||`#${idx+1}`}</span><div class="min-w-0"><div class="flex items-center gap-1.5 flex-wrap"><span class="text-xs sm:text-sm truncate ${prof.nameClass}">${escapeHtml(dispName)}</span>${badge}</div><div class="text-[10px] mono-num text-gray-400">Epoch ${entry.epoch||1} &bull; ${prof.liveryName}</div></div></div><div class="flex items-center shrink-0"><span class="mono-num text-sm sm:text-base font-black text-emerald-400">${entry.score.toLocaleString()}</span>${delBtn}</div></div>`;
+    }).join('');
+}
+
+function adminDeleteIndividualScore(targetKey){
+    if(currentPilot.id!=='1117')return;
+    // Protect Core accounts from individual deletion
+    if(CORE_IDS.has(String(targetKey)))return;
+    const delList=sanitizeDeletedAccountKeys();
+    if(!delList.includes(targetKey)){delList.push(targetKey);saveDeletedAccountKeys(delList);}
+    const db=getAccountsDatabase();
+    if(db[targetKey]){
+        delete db[targetKey];
+        saveAccountsDatabase(db);
+    }
+    const rawLb=getLocalLeaderboard().filter(e=>normalizeEntryAccountKey(e)!==targetKey);
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(rawLb));
+    reconcileAllPilotScores();
+    pushCloudLeaderboardPacket();
+    renderLeaderboardList();
+    refreshAccountStatsUI();
+}
+
+function adminDeleteAllGuestAccounts(){
+    if(currentPilot.id!=='1117')return;
+    const db=getAccountsDatabase();
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    Object.keys(db).forEach(k=>{
+        if(!CORE_IDS.has(k)){
+            delSet.add(k);
+            delete db[k];
+        }
+    });
+    getLocalLeaderboard().forEach(e=>{
+        const k=normalizeEntryAccountKey(e);
+        if(!CORE_IDS.has(k))delSet.add(k);
+    });
+    saveDeletedAccountKeys(Array.from(delSet));
+    saveAccountsDatabase(db);
+    const coreOnly=getLocalLeaderboard().filter(e=>CORE_IDS.has(normalizeEntryAccountKey(e)));
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(coreOnly));
+    reconcileAllPilotScores();
+    pushCloudLeaderboardPacket();
+    renderLeaderboardList();
+    refreshAccountStatsUI();
+    showDevConsoleFeedback("✓ All Guest Accounts & Guest Scores Deleted!");
+}
+
+// Completely resets Best Score (0), Max Epoch (Epoch 1), AND Phantom Flashes (0) for all Core & Guest accounts
+function adminResetAllLeaderboardScores(){
+    if(currentPilot.id!=='1117')return;
+    lastCloudResetTs=Date.now();
+    localStorage.setItem('roadSense_overdrive_resetTs_v8',String(lastCloudResetTs));
+    localStorage.setItem(ACCOUNTS_DB_KEY,JSON.stringify({}));
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify([]));
+    saveDeletedAccountKeys([]);
+
+    updateTopLeaderBanner([]);
+    refreshAccountStatsUI();
+    renderLeaderboardList();
+    pushCloudLeaderboardPacket({resetTs:lastCloudResetTs,entries:[],deletedAccounts:[]});
+    showDevConsoleFeedback("✓ All Scores, Epochs & Phantom Flashes Reset to 0!");
+    playGameSfx('pickup');
+}
+
+function loginPilotById(){
+    const input=document.getElementById('pilotIdInput');
+    const gInput=document.getElementById('guestCallsignInput');
+    let raw=(input?input.value:'').trim();
+    const typedName=(gInput?gInput.value:'').trim();
+
+    const matchedCoreId=resolveCorePilotFromInputs(raw,typedName);
+    if(matchedCoreId){
+        isAccountSessionLocked=true;
+        localStorage.setItem('roadSense_overdrive_accountLocked','true');
+        customGuestId="";
+        localStorage.removeItem('roadSense_overdrive_customGuestId');
+        applyPilotProfile(matchedCoreId);
+        if(input)input.value='';
+        showLoginBanner(`✓ Core Pilot Authenticated: ${currentPilot.name}`,true);
+        playGameSfx('pickup');
+        return;
+    }
+
+    if(!raw){
+        raw=customGuestId&&/^\d{4}$/.test(customGuestId)&&!CORE_IDS.has(customGuestId)?customGuestId:generateRandomGuest4DigitId();
+    }else if(!/^\d{4}$/.test(raw)){
+        showLoginBanner("✕ Enter a 4-digit numeric ID (or leave blank for Auto-ID).",false);
+        playGameSfx('hit');
+        return;
+    }
+
+    isAccountSessionLocked=true;
+    localStorage.setItem('roadSense_overdrive_accountLocked','true');
+    customGuestId=raw;
+    localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
+    const db=getAccountsDatabase();
+    const existingAcc=db[`GUEST_ID_${customGuestId}`];
+    if(typedName){
+        customGuestName=typedName;
+    }else if(existingAcc&&existingAcc.name&&!existingAcc.name.startsWith('Pilot #')){
+        customGuestName=existingAcc.name.replace(/\s*\(#\d{4}\)$/,'');
+    }else{
+        customGuestName="";
+    }
+    localStorage.setItem('roadSense_overdrive_guestName',customGuestName);
+    applyPilotProfile("GUEST");
+    if(input)input.value='';
+    showLoginBanner(`✓ Guest Account Logged In: ${getEffectiveGuestFullLabel()}`,true);
+    playGameSfx('pickup');
+}
+
+function confirmGuestAccountLogin(){
+    const idInput=document.getElementById('pilotIdInput');
+    const gInput=document.getElementById('guestCallsignInput');
+    const rawId=(idInput?idInput.value:'').trim();
+    const rawName=(gInput?gInput.value:'').trim();
+    const matchedCore=resolveCorePilotFromInputs(rawId,rawName);
+    if(matchedCore||(rawId&&/^\d{4}$/.test(rawId))){
+        loginPilotById();
+        return;
+    }
+    ensureGuestHas4DigitId();
+    if(gInput)updateGuestCallsign(rawName);
+    isAccountSessionLocked=true;
+    localStorage.setItem('roadSense_overdrive_accountLocked','true');
+    applyPilotProfile("GUEST");
+    showLoginBanner(`✓ Guest Session Active: ${getEffectiveGuestFullLabel()}`,true);
+    playGameSfx('pickup');
+}
+
 const controlConfig={
     mobileMode:'buttons',doubleTapNitro:true,tiltCenterOffset:0,invertGyro:false,gyroSensitivity:0.65,lastTouchTime:0,
     binds:{left:['a','arrowleft'],right:['d','arrowright'],nitro:['shift','w','arrowup'],brake:['s','arrowdown'],emp:[' ','e'],hideui:['h']}
@@ -1981,6 +2540,7 @@ function returnToMainMenu(){
     syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
     ['epoch250RedAlertModal','singularityAlertBanner','pauseSettingsModal','gameOverModal','leaderboardModal'].forEach(id=>document.getElementById(id).style.display='none');
     document.getElementById('startModal').style.display='flex';
+    reconcileAllPilotScores();
     applyPilotProfile(currentPilot.id);
     refreshAccountStatsUI();
     updateTopLeaderBanner();
@@ -2040,7 +2600,7 @@ function resizeGameCanvas(){
 }
 
 function requestMobileFullscreenSafe(){
-    if(!isMobileHardware)return;
+    if(!isMobileHardware||isPortalExiting)return;
     const docEl=document.documentElement;
     if(!document.fullscreenElement&&docEl.requestFullscreen){
         docEl.requestFullscreen({navigationUI:'hide'}).then(()=>{
@@ -2069,23 +2629,41 @@ function triggerEpoch250BigRedWarning(){
 }
 
 function startGameSession(startEpochOverride=1){
+    if(isPortalExiting)return;
     hasTrustedGesture=true;
     isBootSplashDismissed=true;
     const gate=document.getElementById('bootSplashGateModal');
     if(gate)gate.style.display='none';
     ensureAudioEngine();
     menuUnlockAudio.pause();
-    if(!currentPilot.isCore){
-        const idInp=document.getElementById('pilotIdInput');
-        const gInp=document.getElementById('guestCallsignInput');
-        if(idInp&&/^\d{4}$/.test(idInp.value.trim())){
-            customGuestId=idInp.value.trim();
-            localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
-        }else{
-            ensureGuestHas4DigitId();
+
+    const loginRow=document.getElementById('pilotLoginInputRow');
+    const idInp=document.getElementById('pilotIdInput');
+    const gInp=document.getElementById('guestCallsignInput');
+    const rawId=(idInp?idInp.value:'').trim();
+    const rawName=(gInp?gInp.value:'').trim();
+
+    if(loginRow&&!loginRow.classList.contains('hidden')&&(rawId||rawName)){
+        const matchedCore=resolveCorePilotFromInputs(rawId,rawName);
+        if(matchedCore){
+            customGuestId="";
+            localStorage.removeItem('roadSense_overdrive_customGuestId');
+            applyPilotProfile(matchedCore);
+            if(idInp)idInp.value='';
+        }else if(!currentPilot.isCore){
+            if(/^\d{4}$/.test(rawId)&&!CORE_IDS.has(rawId)){
+                customGuestId=rawId;
+                localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
+            }else{
+                ensureGuestHas4DigitId();
+            }
+            if(rawName)updateGuestCallsign(rawName);
+            applyPilotProfile("GUEST");
         }
-        if(gInp&&gInp.value.trim())updateGuestCallsign(gInp.value.trim());
+    }else if(!currentPilot.isCore){
+        ensureGuestHas4DigitId();
     }
+
     requestMobileFullscreenSafe();
     resizeGameCanvas();
     if(controlConfig.mobileMode==='tilt')calibrateTiltSensor(true);
@@ -2137,11 +2715,26 @@ function syncBiomeForCurrentEpoch(isInitial=false){
 }
 
 function exitGamePortal(){
+    isPortalExiting=true;
+    hasTrustedGesture=false;
     gameState.running=false;
-    silenceAllAudioForBackground();
+    gameState.paused=true;
+    if(synthLoopTimer){clearInterval(synthLoopTimer);synthLoopTimer=null;}
+    try{menuUnlockAudio.pause();menuUnlockAudio.src='';}catch(e){}
+    try{mitadruAudio.pause();customAudio.pause();}catch(e){}
+    if(audioCtx){
+        try{audioCtx.suspend();audioCtx.close();}catch(e){}
+        audioCtx=null;
+    }
+    if(document.fullscreenElement&&document.exitFullscreen){
+        try{document.exitFullscreen().catch(()=>{});}catch(e){}
+    }
     syncCursorVisibility();
     try{window.open('','_self','');window.close();}catch(e){}
-    if(!window.closed){if(window.history.length>1)window.history.back();else window.location.href='index.html';}
+    setTimeout(()=>{
+        try{window.location.replace('about:blank');}catch(e){}
+        document.body.innerHTML=`<div style="position:fixed;inset:0;background:#03050a;color:#94a3b8;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:monospace;text-align:center;padding:24px;"><div style="color:#38bdf8;font-weight:800;font-size:16px;margin-bottom:8px;">ROADSENSE INTERCEPTOR OFFLINE</div><div style="font-size:12px;">Telemetry &amp; Audio Powered Down. You may now close this tab.</div></div>`;
+    },80);
 }
 
 function checkPhantomFlashNearMiss(prevLane){
@@ -2333,26 +2926,28 @@ function updateGamePhysics(dt,now){
         lastHudUpdateTime=now;
         updateHudDOM(false);
         if(!isHudHidden)renderMiniRadar();
-        const curBest=getActiveAccountStats().bestScore||0;
-        if(gameState.score>curBest&&now-lastLiveLbPushTime>4500){
-            lastLiveLbPushTime=now;
-            recordScoreToLeaderboard(gameState.score,gameState.epoch,true);
-        }
     }
 }
 
+// High score & leaderboard are updated ONLY when the endless run ends (when you die)
 function triggerGameOver(){
     gameState.running=false;gameState.ep250WarnTimer=0;
     nextSynthNoteTime=0;nextMenuNoteTime=0;
     document.getElementById('epoch250RedAlertModal').style.display='none';
     syncExternalTrackPlayback();updateEngineSoundPitch();
-    saveActiveAccountStats(gameState.score,gameState.epoch,gameState.nearMisses);
-    recordScoreToLeaderboard(gameState.score,gameState.epoch,true);
+
+    const finalRunScore=Math.max(0,Math.round(gameState.score||0));
+    const finalRunEpoch=Math.max(1,Math.round(gameState.epoch||1));
+    saveActiveAccountStats(finalRunScore,finalRunEpoch,gameState.nearMisses);
+    recordScoreToLeaderboard(finalRunScore,finalRunEpoch,true);
+
     const st=getActiveAccountStats();
-    document.getElementById('finalScoreVal').innerText=gameState.score.toLocaleString();
-    document.getElementById('finalBestVal').innerText=(st.bestScore||gameState.score).toLocaleString();
-    document.getElementById('finalEpochVal').innerText=`Epoch ${gameState.epoch} • ${BIOME_THEMES[biomeIdx].label}`;
+    const overallBest=Math.max(st.bestScore||0,finalRunScore);
+    document.getElementById('finalScoreVal').innerText=finalRunScore.toLocaleString();
+    document.getElementById('finalBestVal').innerText=overallBest.toLocaleString();
+    document.getElementById('finalEpochVal').innerText=`Epoch ${finalRunEpoch} • ${BIOME_THEMES[biomeIdx].label}`;
     document.getElementById('finalNearMissVal').innerText=String(gameState.nearMisses);
+    refreshAccountStatsUI();
     document.getElementById('gameOverModal').style.display='flex';
     syncCursorVisibility();
 }
@@ -2366,7 +2961,8 @@ function updateHudDOM(force=false){
     setStyleWidthCached('hudArmorBar',`${gameState.armor}%`);
     setTextCached('hudArmorPct',`${gameState.armor}%`);
 
-    const nitroPct=Math.floor(gameState.nitroFuel),empPct=Math.floor(gameState.empCharge);
+    const nitroPct=Math.max(0,Math.min(100,Math.floor(gameState.nitroFuel)));
+    const empPct=Math.max(0,Math.min(100,Math.floor(gameState.empCharge)));
     setTextCached('hudNitroPct',`${nitroPct}%`);setStyleWidthCached('hudNitroBar',`${nitroPct}%`);
     setTextCached('hudEmpPct',empPct>=100?"READY!":`${empPct}%`);setStyleWidthCached('hudEmpBar',`${empPct}%`);
 
