@@ -44,7 +44,9 @@ for(let i=0;i<85;i++){
 }
 
 let spawnAccumulator=0,pickupAccumulator=0,radarAngle=Math.PI;
-let lastRawLandscapeTilt=0,smoothedGyroDelta=0,awaitingRebindAction=null,lastHudUpdateTime=0;
+let lastRawLandscapeTilt=0,smoothedGyroDelta=0,needsSilentGyroCalib=true,hasGyroReading=false;
+let dragActive=false,dragStartNormX=0,dragStartLane=0;
+let awaitingRebindAction=null,lastHudUpdateTime=0,lastLiveLbPushTime=0;
 const domCache={};
 let cachedGradients={key:'',sky:null,sun:null};
 
@@ -71,6 +73,7 @@ const PILOT_PROFILES={
     "GUEST":{id:"GUEST",name:"Guest Pilot",callsign:"EGO-01 // GUEST",liveryName:"Tactical Steel",isVoidChroma:false,isCore:false,dotColor:"#38bdf8",chassisTop:"#1e293b",chassisBot:"#0f172a",canopyColor:"#7dd3fc",thrusterColor:"#38bdf8",railColor:"#38bdf8",lbClass:"bg-[#111520] border border-[#232938]",nameClass:"text-gray-200 font-semibold"}
 };
 
+const CORE_IDS=new Set(["1117","1183","1134","1075","1174"]);
 const ACCOUNTS_DB_KEY='roadSense_overdrive_accounts_db_v8';
 const DELETED_ACCOUNTS_KEY='roadSense_overdrive_deleted_accs_v8';
 const SETTINGS_PER_ACC_KEY='roadSense_overdrive_acc_settings_v9';
@@ -83,22 +86,45 @@ let isAccountSessionLocked=localStorage.getItem('roadSense_overdrive_accountLock
 let devAllDimensionsUnlocked=true;
 let isApplyingAccountSettings=false;
 
+function generateRandomGuest4DigitId(){
+    let candidate="1000";
+    for(let tries=0;tries<50;tries++){
+        candidate=String(Math.floor(1000+Math.random()*9000));
+        if(!CORE_IDS.has(candidate))break;
+    }
+    return candidate;
+}
+
+function ensureGuestHas4DigitId(){
+    if(currentPilot.isCore)return "";
+    if(!/^\d{4}$/.test(customGuestId)||CORE_IDS.has(customGuestId)){
+        customGuestId=generateRandomGuest4DigitId();
+        localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
+    }
+    return customGuestId;
+}
+
 function getAccountsDatabase(){try{return JSON.parse(localStorage.getItem(ACCOUNTS_DB_KEY)||'{}');}catch(e){return {};}}
 function saveAccountsDatabase(db){localStorage.setItem(ACCOUNTS_DB_KEY,JSON.stringify(db));}
 function getDeletedAccountKeys(){try{return JSON.parse(localStorage.getItem(DELETED_ACCOUNTS_KEY)||'[]');}catch(e){return [];}}
 function saveDeletedAccountKeys(arr){localStorage.setItem(DELETED_ACCOUNTS_KEY,JSON.stringify(arr));}
 
 function getEffectiveGuestDisplayName(){
+    const gid=ensureGuestHas4DigitId();
     const clean=(customGuestName||"").trim();
     if(clean)return clean;
-    if(customGuestId)return `Pilot #${customGuestId}`;
-    return "Guest Pilot";
+    return `Pilot #${gid}`;
+}
+
+function getEffectiveGuestFullLabel(){
+    const gid=ensureGuestHas4DigitId();
+    const clean=(customGuestName||"").trim();
+    return clean?`${clean} (#${gid})`:`Pilot #${gid}`;
 }
 
 function getActiveAccountStorageKey(){
     if(currentPilot.isCore)return currentPilot.id;
-    if(customGuestId)return `GUEST_ID_${customGuestId}`;
-    return `GUEST_${getEffectiveGuestDisplayName().replace(/\s+/g,'_').toUpperCase()}`;
+    return `GUEST_ID_${ensureGuestHas4DigitId()}`;
 }
 
 function getActiveAccountStats(){
@@ -110,10 +136,11 @@ function saveActiveAccountStats(scoreVal,epochVal,flashesVal){
     const db=getAccountsDatabase();
     const key=getActiveAccountStorageKey();
     const prev=db[key]||{bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false};
-    const dispName=currentPilot.isCore?currentPilot.name:getEffectiveGuestDisplayName();
+    const dispName=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
     const maxEp=Math.max(prev.bestEpoch||1,epochVal);
     db[key]={
         id:currentPilot.isCore?currentPilot.id:key,
+        guestId:currentPilot.isCore?"":ensureGuestHas4DigitId(),
         name:dispName,isCore:currentPilot.isCore,
         bestScore:Math.max(prev.bestScore||0,scoreVal),
         bestEpoch:maxEp,
@@ -187,7 +214,7 @@ function loadOrResetSettingsForActiveAccount(){
                     invBtn.innerText=`⇄ Flip Axis: ${controlConfig.invertGyro?'ON':'OFF'}`;
                     invBtn.className=controlConfig.invertGyro?"px-2 py-1 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] mono-num font-bold cursor-pointer":"px-2 py-1 rounded bg-[#182032] hover:bg-[#232f47] text-gray-200 border border-gray-600/40 text-[10px] mono-num font-bold cursor-pointer";
                 }
-                updateGyroSpeedSetting(Math.round((saved.ctrl.gyroSensitivity||0.45)*100));
+                updateGyroSpeedSetting(Math.round((saved.ctrl.gyroSensitivity||0.65)*100));
                 if(saved.ctrl.binds)controlConfig.binds=saved.ctrl.binds;
                 refreshKeybindLabels();
             }
@@ -230,9 +257,13 @@ function showLoginBanner(msg,ok=true){
 
 function loginPilotById(){
     const input=document.getElementById('pilotIdInput');
-    const raw=(input?input.value:'').trim();
-    if(!/^\d{4}$/.test(raw)){
-        showLoginBanner("✕ Enter a 4-digit numeric ID (e.g., XXXX) or play as Guest.",false);
+    const gInput=document.getElementById('guestCallsignInput');
+    let raw=(input?input.value:'').trim();
+    const typedName=(gInput?gInput.value:'').trim();
+    if(!raw){
+        raw=generateRandomGuest4DigitId();
+    }else if(!/^\d{4}$/.test(raw)){
+        showLoginBanner("✕ Enter a 4-digit numeric ID (or leave blank for Auto-ID).",false);
         playGameSfx('hit');
         return;
     }
@@ -250,52 +281,63 @@ function loginPilotById(){
         localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
         const db=getAccountsDatabase();
         const existingAcc=db[`GUEST_ID_${customGuestId}`];
-        customGuestName=(existingAcc&&existingAcc.name&&!existingAcc.name.startsWith('Pilot #'))?existingAcc.name:"";
+        if(typedName){
+            customGuestName=typedName;
+        }else if(existingAcc&&existingAcc.name&&!existingAcc.name.startsWith('Pilot #')){
+            customGuestName=existingAcc.name.replace(/\s*\(#\d{4}\)$/, '');
+        }else{
+            customGuestName="";
+        }
         localStorage.setItem('roadSense_overdrive_guestName',customGuestName);
         applyPilotProfile("GUEST");
         if(input)input.value='';
-        showLoginBanner(`✓ Account #${customGuestId} Logged In!`,true);
+        showLoginBanner(`✓ Guest Account Logged In: ${getEffectiveGuestFullLabel()}`,true);
         playGameSfx('pickup');
     }
 }
 
 function confirmGuestAccountLogin(){
+    const idInput=document.getElementById('pilotIdInput');
     const gInput=document.getElementById('guestCallsignInput');
+    const rawId=(idInput?idInput.value:'').trim();
+    if(rawId&&/^\d{4}$/.test(rawId)){
+        loginPilotById();
+        return;
+    }
+    ensureGuestHas4DigitId();
     if(gInput)updateGuestCallsign(gInput.value);
     isAccountSessionLocked=true;
     localStorage.setItem('roadSense_overdrive_accountLocked','true');
-    applyPilotProfile(currentPilot.id);
-    showLoginBanner(`✓ Logged in as ${getEffectiveGuestDisplayName()}`,true);
+    applyPilotProfile("GUEST");
+    showLoginBanner(`✓ Guest Session Active: ${getEffectiveGuestFullLabel()}`,true);
     playGameSfx('pickup');
 }
 
 function openSwitchAccountRow(){
     isAccountSessionLocked=false;
     localStorage.setItem('roadSense_overdrive_accountLocked','false');
-    customGuestId="";
+    customGuestId=generateRandomGuest4DigitId();
     customGuestName="";
-    localStorage.removeItem('roadSense_overdrive_customGuestId');
+    localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
     localStorage.removeItem('roadSense_overdrive_guestName');
     const gInput=document.getElementById('guestCallsignInput');
     const idInput=document.getElementById('pilotIdInput');
     if(gInput)gInput.value="";
-    if(idInput)idInput.value="";
+    if(idInput){idInput.value="";idInput.placeholder=customGuestId;}
     applyPilotProfile("GUEST");
-    showLoginBanner("⇄ Switched to New Guest Session (Default Settings Loaded).",true);
+    showLoginBanner(`⇄ New Guest ID Assigned: #${customGuestId} (Or enter custom 4-digit ID / Name).`,true);
 }
 
 function updateGuestCallsign(val){
     customGuestName=(val||"").trim();
     localStorage.setItem('roadSense_overdrive_guestName',customGuestName);
     if(!currentPilot.isCore){
-        const disp=getEffectiveGuestDisplayName();
-        document.getElementById('activePilotLabel').innerText=customGuestId?`${disp} (#${customGuestId})`:disp;
-        document.getElementById('hudPilotCallsign').innerText=disp.toUpperCase();
-        if(customGuestId){
-            const db=getAccountsDatabase();
-            const key=getActiveAccountStorageKey();
-            if(db[key]){db[key].name=disp;saveAccountsDatabase(db);}
-        }
+        const fullLbl=getEffectiveGuestFullLabel();
+        document.getElementById('activePilotLabel').innerText=fullLbl;
+        document.getElementById('hudPilotCallsign').innerText=fullLbl.toUpperCase();
+        const db=getAccountsDatabase();
+        const key=getActiveAccountStorageKey();
+        if(db[key]){db[key].name=fullLbl;saveAccountsDatabase(db);}
         refreshAccountStatsUI();
     }
 }
@@ -307,12 +349,13 @@ function applyPilotProfile(idKey){
     if(currentPilot.isCore){
         isAccountSessionLocked=true;
         localStorage.setItem('roadSense_overdrive_accountLocked','true');
+    }else{
+        ensureGuestHas4DigitId();
     }
     if(currentPilot.id==="1117")devAllDimensionsUnlocked=true;
     loadOrResetSettingsForActiveAccount();
-    const dispName=currentPilot.isCore?currentPilot.name:getEffectiveGuestDisplayName();
-    const dispLabel=(!currentPilot.isCore&&customGuestId)?`${dispName} (#${customGuestId})`:dispName;
-    const displayCallsign=currentPilot.isCore?currentPilot.callsign:dispName.toUpperCase();
+    const dispLabel=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
+    const displayCallsign=currentPilot.isCore?currentPilot.callsign:dispLabel.toUpperCase();
     document.getElementById('activePilotLabel').innerText=dispLabel;
     document.getElementById('activeLiveryBadge').innerText=activeLiveryProfile.liveryName;
     document.getElementById('activePilotColorDot').style.backgroundColor=activeLiveryProfile.dotColor;
@@ -328,7 +371,9 @@ function applyPilotProfile(idKey){
         if(loginRow)loginRow.classList.remove('hidden');
         if(switchBtn)switchBtn.classList.add('hidden');
         const gInput=document.getElementById('guestCallsignInput');
+        const idInput=document.getElementById('pilotIdInput');
         if(gInput)gInput.value=customGuestName;
+        if(idInput)idInput.placeholder=customGuestId||"Auto";
     }
 
     const devTabBtn=document.getElementById('setTabBtn_dev');
@@ -439,16 +484,16 @@ function toggleAutoBiomeCycle(){
     saveSettingsForActiveAccount();
 }
 
-const audioSettings={master:0.90,music:0.85,menuMusic:0.80,engine:0.75,sfx:0.90,uiClick:0.85,ostMode:'synth'};
+const audioSettings={master:0.95,music:0.90,menuMusic:0.85,engine:0.80,sfx:0.92,uiClick:0.85,ostMode:'synth'};
 let audioCtx=null,masterGainNode=null,compressorNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0;
 
 function buildVolumeSlidersUI(){
     const sliders=[
-        {k:'master',lbl:'🔊 Master Volume',col:'emerald',val:90},
-        {k:'music',lbl:'🎵 Gameplay OST Volume',col:'sky',val:85},
-        {k:'menuMusic',lbl:'🎹 Menu & Pause Music',col:'cyan',val:80},
-        {k:'engine',lbl:'🏎️ Engine & Turbo',col:'amber',val:75},
-        {k:'sfx',lbl:'⚡ Effects, EMP & Siren',col:'purple',val:90},
+        {k:'master',lbl:'🔊 Master Volume',col:'emerald',val:95},
+        {k:'music',lbl:'🎵 Gameplay OST Volume',col:'sky',val:90},
+        {k:'menuMusic',lbl:'🎹 Menu & Pause Music',col:'cyan',val:85},
+        {k:'engine',lbl:'🏎️ Engine & Turbo',col:'amber',val:80},
+        {k:'sfx',lbl:'⚡ Effects, EMP & Siren',col:'purple',val:92},
         {k:'uiClick',lbl:'🔘 UI Button Clicks',col:'pink',val:85}
     ];
     const grid=document.getElementById('volumeSlidersGrid');
@@ -495,7 +540,7 @@ async function handleCustomSongUpload(files){
     try{
         const db=await openCustomSongsIDB();
         const accountKey=getActiveAccountStorageKey();
-        const pilotName=currentPilot.isCore?currentPilot.name:getEffectiveGuestDisplayName();
+        const pilotName=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
         await new Promise((res,rej)=>{
             const tx=db.transaction('songs','readwrite');
             tx.objectStore('songs').put({accountKey,pilotName,fileName:file.name,sizeBytes:file.size,blob:file,ts:Date.now()});
@@ -606,10 +651,11 @@ function ensureAudioEngine(){
     if(!audioCtx){
         audioCtx=new (window.AudioContext||window.webkitAudioContext)();
         compressorNode=audioCtx.createDynamicsCompressor();
-        compressorNode.threshold.setValueAtTime(-14,audioCtx.currentTime);
-        compressorNode.ratio.setValueAtTime(6,audioCtx.currentTime);
+        compressorNode.threshold.setValueAtTime(-10,audioCtx.currentTime);
+        compressorNode.knee.setValueAtTime(10,audioCtx.currentTime);
+        compressorNode.ratio.setValueAtTime(3.5,audioCtx.currentTime);
         masterGainNode=audioCtx.createGain();
-        masterGainNode.gain.setValueAtTime(audioSettings.master,audioCtx.currentTime);
+        masterGainNode.gain.setValueAtTime(audioSettings.master*1.65,audioCtx.currentTime);
         masterGainNode.connect(compressorNode);
         compressorNode.connect(audioCtx.destination);
         engineOsc1=audioCtx.createOscillator();
@@ -621,7 +667,7 @@ function ensureAudioEngine(){
         engineOsc1.frequency.setValueAtTime(56,audioCtx.currentTime);
         engineOsc2.frequency.setValueAtTime(112,audioCtx.currentTime);
         engineFilter.type='lowpass';
-        engineFilter.frequency.setValueAtTime(230,audioCtx.currentTime);
+        engineFilter.frequency.setValueAtTime(280,audioCtx.currentTime);
         engineGain.gain.setValueAtTime(0.0001,audioCtx.currentTime);
         engineOsc1.connect(engineFilter);
         engineOsc2.connect(engineFilter);
@@ -643,10 +689,10 @@ function updateEngineSoundPitch(){
         return;
     }
     const speedRatio=Math.max(0.5,Math.min(2.3,gameState.speedMps/30));
-    const baseFreq=50*speedRatio+(gameState.boosting?25:0);
+    const baseFreq=52*speedRatio+(gameState.boosting?28:0);
     engineOsc1.frequency.setTargetAtTime(baseFreq,now,0.05);
     engineOsc2.frequency.setTargetAtTime(baseFreq*2.02,now,0.05);
-    const targetVol=0.085*audioSettings.engine*(gameState.boosting?1.35:0.9);
+    const targetVol=0.18*audioSettings.engine*(gameState.boosting?1.35:0.95);
     engineGain.gain.setTargetAtTime(Math.max(0.0001,targetVol),now,0.06);
 }
 
@@ -662,13 +708,15 @@ function startUnifiedMusicScheduler(){
             if(audioSettings.menuMusic<=0.01)return;
             if(menuStep%2===0){
                 const now=audioCtx.currentTime;
-                const mOsc=audioCtx.createOscillator(),mGain=audioCtx.createGain();
-                mOsc.type='sine';
-                mOsc.frequency.setValueAtTime(menuChords[(menuStep>>1)%menuChords.length],now);
-                mGain.gain.setValueAtTime(0.07*audioSettings.menuMusic,now);
-                mGain.gain.exponentialRampToValueAtTime(0.001,now+0.22);
-                mOsc.connect(mGain);mGain.connect(masterGainNode);
-                mOsc.start(now);mOsc.stop(now+0.22);
+                const note=menuChords[(menuStep>>1)%menuChords.length];
+                const mOsc1=audioCtx.createOscillator(),mOsc2=audioCtx.createOscillator(),mGain=audioCtx.createGain();
+                mOsc1.type='triangle';mOsc2.type='sine';
+                mOsc1.frequency.setValueAtTime(note,now);
+                mOsc2.frequency.setValueAtTime(note*0.5,now);
+                mGain.gain.setValueAtTime(0.34*audioSettings.menuMusic,now);
+                mGain.gain.exponentialRampToValueAtTime(0.002,now+0.26);
+                mOsc1.connect(mGain);mOsc2.connect(mGain);mGain.connect(masterGainNode);
+                mOsc1.start(now);mOsc2.start(now);mOsc1.stop(now+0.26);mOsc2.stop(now+0.26);
             }
             menuStep++;
             return;
@@ -679,24 +727,36 @@ function startUnifiedMusicScheduler(){
             if(s16%4===0){
                 const kOsc=audioCtx.createOscillator(),kGain=audioCtx.createGain();
                 kOsc.type='sine';
-                kOsc.frequency.setValueAtTime(135,now);
-                kOsc.frequency.exponentialRampToValueAtTime(34,now+0.13);
-                kGain.gain.setValueAtTime(0.28*mVol,now);
-                kGain.gain.exponentialRampToValueAtTime(0.001,now+0.14);
+                kOsc.frequency.setValueAtTime(155,now);
+                kOsc.frequency.exponentialRampToValueAtTime(36,now+0.14);
+                kGain.gain.setValueAtTime(0.68*mVol,now);
+                kGain.gain.exponentialRampToValueAtTime(0.001,now+0.15);
                 kOsc.connect(kGain);kGain.connect(masterGainNode);
-                kOsc.start(now);kOsc.stop(now+0.14);
+                kOsc.start(now);kOsc.stop(now+0.15);
+            }else if(s16%4===2){
+                const sOsc=audioCtx.createOscillator(),sGain=audioCtx.createGain();
+                sOsc.type='triangle';
+                sOsc.frequency.setValueAtTime(240,now);
+                sOsc.frequency.exponentialRampToValueAtTime(95,now+0.09);
+                sGain.gain.setValueAtTime(0.32*mVol,now);
+                sGain.gain.exponentialRampToValueAtTime(0.001,now+0.095);
+                sOsc.connect(sGain);sGain.connect(masterGainNode);
+                sOsc.start(now);sOsc.stop(now+0.095);
             }
             const bOsc=audioCtx.createOscillator(),bFilter=audioCtx.createBiquadFilter(),bGain=audioCtx.createGain();
             bOsc.type='sawtooth';bOsc.frequency.setValueAtTime(bassNotes[s16],now);
-            bFilter.type='lowpass';bFilter.frequency.setValueAtTime(520,now);
-            bGain.gain.setValueAtTime(0.12*mVol,now);bGain.gain.exponentialRampToValueAtTime(0.001,now+0.11);
+            bFilter.type='lowpass';bFilter.frequency.setValueAtTime(760,now);
+            bGain.gain.setValueAtTime(0.42*mVol,now);bGain.gain.exponentialRampToValueAtTime(0.002,now+0.115);
             bOsc.connect(bFilter);bFilter.connect(bGain);bGain.connect(masterGainNode);
-            bOsc.start(now);bOsc.stop(now+0.11);
-            const lOsc=audioCtx.createOscillator(),lGain=audioCtx.createGain();
-            lOsc.type='triangle';lOsc.frequency.setValueAtTime(arpNotes[s16],now);
-            lGain.gain.setValueAtTime(0.075*mVol,now);lGain.gain.exponentialRampToValueAtTime(0.001,now+0.14);
-            lOsc.connect(lGain);lGain.connect(masterGainNode);
-            lOsc.start(now);lOsc.stop(now+0.14);
+            bOsc.start(now);bOsc.stop(now+0.115);
+
+            const lOsc=audioCtx.createOscillator(),lOsc2=audioCtx.createOscillator(),lGain=audioCtx.createGain();
+            lOsc.type='sawtooth';lOsc2.type='triangle';
+            lOsc.frequency.setValueAtTime(arpNotes[s16],now);
+            lOsc2.frequency.setValueAtTime(arpNotes[s16]*1.004,now);
+            lGain.gain.setValueAtTime(0.30*mVol,now);lGain.gain.exponentialRampToValueAtTime(0.002,now+0.14);
+            lOsc.connect(lGain);lOsc2.connect(lGain);lGain.connect(masterGainNode);
+            lOsc.start(now);lOsc2.start(now);lOsc.stop(now+0.14);lOsc2.stop(now+0.14);
             synthStep++;
         }catch(e){}
     },117);
@@ -704,8 +764,8 @@ function startUnifiedMusicScheduler(){
 
 function syncExternalTrackPlayback(){
     const shouldPlay=gameState.running&&!gameState.paused&&!document.hidden;
-    mitadruAudio.volume=audioSettings.master*audioSettings.music;
-    customAudio.volume=audioSettings.master*audioSettings.music;
+    mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
+    customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     if(!shouldPlay){mitadruAudio.pause();customAudio.pause();return;}
     if(audioSettings.ostMode==='mitadru'){
         customAudio.pause();
@@ -748,9 +808,9 @@ function updateVolumeSetting(ch,val){
     if(lbl)lbl.innerText=`${Math.round(num*100)}%`;
     const sld=document.getElementById(`volSlider_${ch}`);
     if(sld&&String(sld.value)!==String(Math.round(num*100)))sld.value=Math.round(num*100);
-    if(masterGainNode&&audioCtx)masterGainNode.gain.setTargetAtTime(audioSettings.master,audioCtx.currentTime,0.03);
-    mitadruAudio.volume=audioSettings.master*audioSettings.music;
-    customAudio.volume=audioSettings.master*audioSettings.music;
+    if(masterGainNode&&audioCtx)masterGainNode.gain.setTargetAtTime(audioSettings.master*1.65,audioCtx.currentTime,0.03);
+    mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
+    customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     updateEngineSoundPitch();
     saveSettingsForActiveAccount();
 }
@@ -762,45 +822,45 @@ function playGameSfx(type){
         if(type==='uiClick'){
             if(cVol<=0.01)return;
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sine';o.frequency.setValueAtTime(420,now);o.frequency.exponentialRampToValueAtTime(740,now+0.055);
-            g.gain.setValueAtTime(0.15*cVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
+            o.type='sine';o.frequency.setValueAtTime(440,now);o.frequency.exponentialRampToValueAtTime(780,now+0.055);
+            g.gain.setValueAtTime(0.24*cVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
             o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.06);
             return;
         }
         if(sVol<=0.01)return;
         if(type==='steer'){
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sine';o.frequency.setValueAtTime(360,now);o.frequency.exponentialRampToValueAtTime(620,now+0.06);
-            g.gain.setValueAtTime(0.14*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.065);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.065);
+            o.type='sine';o.frequency.setValueAtTime(380,now);o.frequency.exponentialRampToValueAtTime(640,now+0.055);
+            g.gain.setValueAtTime(0.22*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
+            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.06);
         }else if(type==='siren250'){
             for(let c=0;c<6;c++){
                 const st=now+c*0.5,o=actx.createOscillator(),g=actx.createGain();
                 o.type='sawtooth';o.frequency.setValueAtTime(440,st);o.frequency.linearRampToValueAtTime(880,st+0.25);o.frequency.linearRampToValueAtTime(440,st+0.48);
-                g.gain.setValueAtTime(0.24*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
+                g.gain.setValueAtTime(0.36*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
                 o.connect(g);g.connect(masterGainNode);o.start(st);o.stop(st+0.49);
             }
         }else if(type==='phantom'){
             [587.33,880.0,1174.66,1760.0].forEach((f,idx)=>{
                 const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.032;
                 o.type='triangle';o.frequency.setValueAtTime(f,st);
-                g.gain.setValueAtTime(0.22*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.26);
+                g.gain.setValueAtTime(0.34*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.26);
                 o.connect(g);g.connect(masterGainNode);o.start(st);o.stop(st+0.26);
             });
         }else if(type==='pickup'){
             const o=actx.createOscillator(),g=actx.createGain();
             o.type='sine';o.frequency.setValueAtTime(680,now);o.frequency.setValueAtTime(1020,now+0.045);
-            g.gain.setValueAtTime(0.18*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.16);
+            g.gain.setValueAtTime(0.30*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.16);
             o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.16);
         }else if(type==='emp'){
             const o=actx.createOscillator(),g=actx.createGain();
             o.type='sawtooth';o.frequency.setValueAtTime(920,now);o.frequency.exponentialRampToValueAtTime(36,now+0.65);
-            g.gain.setValueAtTime(0.36*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.68);
+            g.gain.setValueAtTime(0.48*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.68);
             o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.68);
         }else if(type==='hit'){
             const o=actx.createOscillator(),g=actx.createGain();
             o.type='sawtooth';o.frequency.setValueAtTime(145,now);o.frequency.exponentialRampToValueAtTime(28,now+0.32);
-            g.gain.setValueAtTime(0.38*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.34);
+            g.gain.setValueAtTime(0.50*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.34);
             o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.34);
         }
     }catch(e){}
@@ -820,7 +880,7 @@ const LB_STORAGE_KEY='roadSense_overdrive_leaderboard_v8';
 const CLOUD_SYNC_TOPIC='roadsense_overdrive_global_lb_sync_v8';
 const CLOUD_SYNC_URL=`https://ntfy.sh/${CLOUD_SYNC_TOPIC}`;
 const lbChannel=('BroadcastChannel' in window)?new BroadcastChannel('roadsense_overdrive_lb_v8'):null;
-let isPullingCloud=false;
+let isPullingCloud=false,liveEventSource=null;
 let lastCloudResetTs=Number(localStorage.getItem('roadSense_overdrive_resetTs_v8')||0);
 
 function getLocalLeaderboard(){
@@ -865,7 +925,7 @@ function mergeRemoteLeaderboardPacket(packet){
         if(delSet.has(k))return;
         const ex=mapByKey.get(k);
         if(!ex||rem.score>ex.score){
-            mapByKey.set(k,{id:rem.id||'GUEST',accountKey:k,name:rem.name||'Guest Pilot',score:Number(rem.score),epoch:Number(rem.epoch||1),ts:Number(rem.ts||Date.now())});
+            mapByKey.set(k,{id:rem.id||'GUEST',guestId:rem.guestId||'',accountKey:k,name:rem.name||'Guest Pilot',score:Number(rem.score),epoch:Number(rem.epoch||1),ts:Number(rem.ts||Date.now())});
         }
     });
     saveLocalLeaderboard(Array.from(mapByKey.values()));
@@ -876,6 +936,27 @@ function pushCloudLeaderboardPacket(extra={}){
     const payload={type:'lb_sync_v8',resetTs:lastCloudResetTs,entries:getLocalLeaderboard().slice(0,35),deletedAccounts:getDeletedAccountKeys(),...extra};
     if(lbChannel){try{lbChannel.postMessage(payload);}catch(e){}}
     fetch(CLOUD_SYNC_URL,{method:'POST',body:JSON.stringify(payload)}).catch(()=>{});
+}
+
+function startLiveLeaderboardStream(){
+    if(liveEventSource||typeof EventSource==='undefined')return;
+    try{
+        liveEventSource=new EventSource(`${CLOUD_SYNC_URL}/sse`);
+        liveEventSource.onmessage=(ev)=>{
+            try{
+                const data=JSON.parse(ev.data);
+                if(data&&data.message){
+                    const pkt=JSON.parse(data.message);
+                    if(pkt&&pkt.type==='lb_sync_v8')mergeRemoteLeaderboardPacket(pkt);
+                }
+            }catch(e){}
+        };
+        liveEventSource.onerror=()=>{
+            try{liveEventSource.close();}catch(e){}
+            liveEventSource=null;
+            setTimeout(startLiveLeaderboardStream,5000);
+        };
+    }catch(e){}
 }
 
 async function pullGlobalCloudLeaderboard(){
@@ -904,26 +985,33 @@ async function pullGlobalCloudLeaderboard(){
     }
 }
 
-function recordScoreToLeaderboard(scoreVal,epochVal){
+function recordScoreToLeaderboard(scoreVal,epochVal,pushRemote=true){
     if(!scoreVal||scoreVal<=0)return;
     const accountKey=getActiveAccountStorageKey();
     const pid=currentPilot.isCore?currentPilot.id:'GUEST';
-    const pName=currentPilot.isCore?currentPilot.name:getEffectiveGuestDisplayName();
+    const gid=currentPilot.isCore?'':ensureGuestHas4DigitId();
+    const pName=currentPilot.isCore?currentPilot.name:getEffectiveGuestFullLabel();
     saveDeletedAccountKeys(getDeletedAccountKeys().filter(k=>k!==accountKey));
     const list=getLocalLeaderboard();
     const idx=list.findIndex(e=>(e.accountKey||e.id)===accountKey);
+    let changed=false;
     if(idx>=0){
         if(scoreVal>list[idx].score){
             list[idx].score=scoreVal;
             list[idx].epoch=Math.max(list[idx].epoch||1,epochVal);
             list[idx].name=pName;
+            list[idx].guestId=gid;
             list[idx].ts=Date.now();
+            changed=true;
         }
     }else{
-        list.push({id:pid,accountKey,name:pName,score:scoreVal,epoch:epochVal,ts:Date.now()});
+        list.push({id:pid,guestId:gid,accountKey,name:pName,score:scoreVal,epoch:epochVal,ts:Date.now()});
+        changed=true;
     }
-    saveLocalLeaderboard(list);
-    pushCloudLeaderboardPacket();
+    if(changed){
+        saveLocalLeaderboard(list);
+        if(pushRemote)pushCloudLeaderboardPacket();
+    }
 }
 
 function updateTopLeaderBanner(list=null){
@@ -940,6 +1028,15 @@ function updateTopLeaderBanner(list=null){
     }
 }
 
+function extractGuestIdTag(entry){
+    if(entry.guestId)return entry.guestId;
+    const m1=String(entry.accountKey||'').match(/(\d{4})$/);
+    if(m1)return m1[1];
+    const m2=String(entry.name||'').match(/#(\d{4})/);
+    if(m2)return m2[1];
+    return "GUEST";
+}
+
 function renderLeaderboardList(){
     const container=document.getElementById('leaderboardListContainer');
     if(!container)return;
@@ -954,9 +1051,15 @@ function renderLeaderboardList(){
         const prof=PILOT_PROFILES[entry.id]||PILOT_PROFILES["GUEST"];
         const isCore=Boolean(PILOT_PROFILES[entry.id]&&entry.id!=='GUEST');
         const accKey=entry.accountKey||entry.id;
+        const gTag=isCore?'':extractGuestIdTag(entry);
+        const dispName=(!isCore&&gTag!=='GUEST'&&!String(entry.name).includes(`#${gTag}`))?`${entry.name} (#${gTag})`:entry.name;
         const delBtn=isAdmin?`<button type="button" onclick="adminDeleteIndividualScore('${escapeHtml(accKey)}')" class="ml-2 px-2 py-1 rounded bg-red-600/85 hover:bg-red-500 text-white text-[9px] mono-num font-bold cursor-pointer">🗑️ Delete</button>`:'';
-        const badge=prof.isVoidChroma?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-extrabold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/50">👑 ARCHITECT VOID</span>`:(isCore?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-bold rounded bg-white/10 text-gray-200">⚡ CORE TEAM</span>`:`<span class="px-1.5 py-0.5 text-[9px] mono-num rounded bg-gray-800 text-gray-400">PILOT</span>`);
-        return `<div class="p-3 rounded-xl flex items-center justify-between gap-2 transition ${prof.lbClass}"><div class="flex items-center gap-2.5 min-w-0"><span class="mono-num text-xs font-black text-white px-2 py-1 rounded bg-black/40 border border-white/10 shrink-0">${medals[idx]||`#${idx+1}`}</span><div class="min-w-0"><div class="flex items-center gap-1.5 flex-wrap"><span class="text-xs sm:text-sm truncate ${prof.nameClass}">${escapeHtml(entry.name)}</span>${badge}</div><div class="text-[10px] mono-num text-gray-400">Epoch ${entry.epoch||1} &bull; ${prof.liveryName}</div></div></div><div class="flex items-center shrink-0"><span class="mono-num text-sm sm:text-base font-black text-emerald-400">${entry.score.toLocaleString()}</span>${delBtn}</div></div>`;
+        const badge=prof.isVoidChroma
+            ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-extrabold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/50">👑 ARCHITECT VOID</span>`
+            :(isCore
+                ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-bold rounded bg-white/10 text-gray-200">⚡ CORE #${entry.id}</span>`
+                :`<span class="px-1.5 py-0.5 text-[9px] mono-num rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">👤 GUEST #${escapeHtml(gTag)}</span>`);
+        return `<div class="p-3 rounded-xl flex items-center justify-between gap-2 transition ${prof.lbClass}"><div class="flex items-center gap-2.5 min-w-0"><span class="mono-num text-xs font-black text-white px-2 py-1 rounded bg-black/40 border border-white/10 shrink-0">${medals[idx]||`#${idx+1}`}</span><div class="min-w-0"><div class="flex items-center gap-1.5 flex-wrap"><span class="text-xs sm:text-sm truncate ${prof.nameClass}">${escapeHtml(dispName)}</span>${badge}</div><div class="text-[10px] mono-num text-gray-400">Epoch ${entry.epoch||1} &bull; ${prof.liveryName}</div></div></div><div class="flex items-center shrink-0"><span class="mono-num text-sm sm:text-base font-black text-emerald-400">${entry.score.toLocaleString()}</span>${delBtn}</div></div>`;
     }).join('');
 }
 
@@ -1213,7 +1316,7 @@ function setVisualFilter(fc,shouldSave=true){
 }
 
 const controlConfig={
-    mobileMode:'buttons',doubleTapNitro:true,tiltCenterOffset:0,invertGyro:false,gyroSensitivity:0.45,lastTouchTime:0,
+    mobileMode:'buttons',doubleTapNitro:true,tiltCenterOffset:0,invertGyro:false,gyroSensitivity:0.65,lastTouchTime:0,
     binds:{left:['a','arrowleft'],right:['d','arrowright'],nitro:['shift','w','arrowup'],brake:['s','arrowdown'],emp:[' ','e'],hideui:['h']}
 };
 
@@ -1233,10 +1336,10 @@ function buildKeybindGridUI(){
 }
 
 function updateGyroSpeedSetting(val){
-    const pct=Math.max(20,Math.min(100,parseInt(val,10)||45));
+    const pct=Math.max(20,Math.min(100,parseInt(val,10)||65));
     controlConfig.gyroSensitivity=pct/100;
     const lbl=document.getElementById('gyroSpeedLabel');
-    if(lbl)lbl.innerText=`${pct}% (${pct<=50?'Smooth':(pct<=75?'Balanced':'Fast')})`;
+    if(lbl)lbl.innerText=`${pct}% (${pct<=45?'Gentle':(pct<=75?'Responsive':'Ultra-Fast')})`;
     const sld=document.getElementById('gyroSpeedSlider');
     if(sld&&String(sld.value)!==String(pct))sld.value=pct;
     saveSettingsForActiveAccount();
@@ -1270,17 +1373,21 @@ function setMobileControlMode(mode){
     const mapSteer=document.getElementById('mapSteerDesc');
     if(mapTitle&&mapSteer){
         if(mode==='buttons'){mapTitle.innerText="ACTIVE CONTROL MAP // ARROW PADDLES";mapSteer.innerText="Left ◀ / ▶ Right Dock";}
-        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // FINGER DRAG";mapSteer.innerText="Slide Finger Left/Right on Road";}
-        else{mapTitle.innerText="ACTIVE CONTROL MAP // PHONE TILT (GYRO)";mapSteer.innerText="Tilt Phone in Landscape (Wheel)";}
+        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // FINGER DRAG";mapSteer.innerText="1:1 Direct Finger Glide on Road";}
+        else{mapTitle.innerText="ACTIVE CONTROL MAP // PHONE TILT (GYRO)";mapSteer.innerText="Auto-Zeroed Wrist Tilt Steering";}
     }
-    if(mode==='tilt'&&typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
-        DeviceOrientationEvent.requestPermission().catch(()=>{});
+    if(mode==='tilt'){
+        calibrateTiltSensor(true);
+        if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+            DeviceOrientationEvent.requestPermission().catch(()=>{});
+        }
     }
     saveSettingsForActiveAccount();
 }
 
 function toggleInvertGyro(){
     controlConfig.invertGyro=!controlConfig.invertGyro;
+    needsSilentGyroCalib=true;
     const btn=document.getElementById('invertGyroBtn');
     if(btn){
         btn.innerText=`⇄ Flip Axis: ${controlConfig.invertGyro?'ON':'OFF'}`;
@@ -1289,13 +1396,17 @@ function toggleInvertGyro(){
     saveSettingsForActiveAccount();
 }
 
-function calibrateTiltSensor(){
-    if(controlConfig.mobileMode!=='tilt')return;
-    controlConfig.tiltCenterOffset=lastRawLandscapeTilt;
-    smoothedGyroDelta=0;
+function calibrateTiltSensor(silent=true){
+    if(hasGyroReading){
+        controlConfig.tiltCenterOffset=lastRawLandscapeTilt;
+        smoothedGyroDelta=0;
+        needsSilentGyroCalib=false;
+    }else{
+        needsSilentGyroCalib=true;
+    }
     const angleLbl=document.getElementById('gyroLiveAngleLabel');
-    if(angleLbl)angleLbl.innerText="0.0° (CALIBRATED ✓)";
-    playGameSfx('pickup');
+    if(angleLbl)angleLbl.innerText="0.0°";
+    if(!silent)playGameSfx('pickup');
 }
 
 function applyDoubleTapNitroState(enabled){
@@ -1321,11 +1432,11 @@ function resetGameSettingsOnly(){
 }
 
 function resetSoundSettingsOnly(){
-    updateVolumeSetting('master',90);
-    updateVolumeSetting('music',85);
-    updateVolumeSetting('menuMusic',80);
-    updateVolumeSetting('engine',75);
-    updateVolumeSetting('sfx',90);
+    updateVolumeSetting('master',95);
+    updateVolumeSetting('music',90);
+    updateVolumeSetting('menuMusic',85);
+    updateVolumeSetting('engine',80);
+    updateVolumeSetting('sfx',92);
     updateVolumeSetting('uiClick',85);
     selectOstMode('synth');
     saveSettingsForActiveAccount();
@@ -1334,8 +1445,8 @@ function resetSoundSettingsOnly(){
 function resetControlSettingsOnly(){
     setMobileControlMode('buttons');
     applyDoubleTapNitroState(true);
-    updateGyroSpeedSetting(45);
-    controlConfig.tiltCenterOffset=0;
+    updateGyroSpeedSetting(65);
+    controlConfig.tiltCenterOffset=lastRawLandscapeTilt;
     controlConfig.invertGyro=false;
     const invBtn=document.getElementById('invertGyroBtn');
     if(invBtn){
@@ -1351,23 +1462,51 @@ function resetGraphicsSettingsOnly(){
     applyGraphicsPreset(recommendedPresetKey,true);
 }
 
-function setDiscreteTargetLane(newLaneInt){
-    const clamped=Math.max(-2,Math.min(2,Math.round(newLaneInt)));
-    const prevLane=Math.round(gameState.targetLane);
-    if(clamped!==prevLane){
-        const dir=clamped>prevLane?1:-1;
-        gameState.targetLane=clamped;
+function setContinuousOrDiscreteLane(newLaneFloat,instant=false){
+    const clamped=Math.max(-2,Math.min(2,newLaneFloat));
+    const prevInt=Math.round(gameState.egoLaneX);
+    const nextInt=Math.round(clamped);
+    gameState.targetLane=clamped;
+    if(instant){
+        const diff=clamped-gameState.egoLaneX;
+        gameState.egoRoll=Math.max(-0.18,Math.min(0.18,diff*0.22));
+        gameState.egoLaneX=clamped;
+    }
+    if(nextInt!==prevInt){
         playGameSfx('steer');
-        gameState.egoRoll=dir*0.14;
-        checkPhantomFlashNearMiss(prevLane);
+        if(!instant)gameState.egoRoll=(nextInt>prevInt?1:-1)*0.14;
+        checkPhantomFlashNearMiss(prevInt);
     }
 }
 
-function handleCanvasPointerDrag(e){
-    const wrapper=document.getElementById('gameViewportWrapper');
-    const isRot=isMobileHardware&&window.innerHeight>window.innerWidth;
-    const normX=isRot?(e.clientY/Math.max(1,window.innerHeight)):(e.clientX/Math.max(1,wrapper.clientWidth));
-    setDiscreteTargetLane(Math.round((normX-0.5)*4.8));
+function setDiscreteTargetLane(newLaneInt){
+    setContinuousOrDiscreteLane(Math.round(newLaneInt),false);
+}
+
+function getPointerNormalizedX(e){
+    const vw=gameState.viewW||window.innerWidth||800;
+    const vh=gameState.viewH||window.innerHeight||450;
+    const isRot=isMobileHardware&&(window.innerHeight>window.innerWidth);
+    return isRot?(e.clientY/Math.max(1,window.innerHeight)):(e.clientX/Math.max(1,vw));
+}
+
+function handleCanvasPointerDownDrag(e){
+    dragActive=true;
+    dragStartNormX=getPointerNormalizedX(e);
+    dragStartLane=gameState.egoLaneX;
+    if(dragStartNormX>0.18&&dragStartNormX<0.82){
+        const directLane=Math.max(-2,Math.min(2,(dragStartNormX-0.5)*5.8));
+        setContinuousOrDiscreteLane(directLane,true);
+        dragStartLane=directLane;
+    }
+}
+
+function handleCanvasPointerMoveDrag(e){
+    if(!dragActive)return;
+    const curNormX=getPointerNormalizedX(e);
+    const deltaNorm=curNormX-dragStartNormX;
+    const newLane=Math.max(-2,Math.min(2,dragStartLane+deltaNorm*6.4));
+    setContinuousOrDiscreteLane(newLane,true);
 }
 
 function startKeyRebind(actionKey){
@@ -1427,6 +1566,8 @@ function openPauseSettingsModal(defaultTab='game'){
 function resumeFromSettings(){
     document.getElementById('pauseSettingsModal').style.display='none';
     if(gameState.running){
+        requestMobileFullscreenSafe();
+        if(controlConfig.mobileMode==='tilt')calibrateTiltSensor(true);
         gameState.paused=false;
         syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);
     }
@@ -1471,8 +1612,9 @@ const EGO_Z_REAR=1.24,EGO_Z_CENTER=1.45,EGO_Z_FRONT=1.70,EGO_HALF_LANE_W=0.35;
 function resizeGameCanvas(){
     detectDeviceHardware();
     const wrapper=document.getElementById('gameViewportWrapper');
-    const winW=window.innerWidth||document.documentElement.clientWidth||800;
-    const winH=window.innerHeight||document.documentElement.clientHeight||450;
+    const vv=window.visualViewport;
+    const winW=Math.round(vv?vv.width:(window.innerWidth||document.documentElement.clientWidth||800));
+    const winH=Math.round(vv?vv.height:(window.innerHeight||document.documentElement.clientHeight||450));
     let w=winW,h=winH;
     if(isMobileHardware&&winH>winW){
         w=winH;h=winW;
@@ -1501,12 +1643,21 @@ function requestMobileFullscreenSafe(){
     if(!document.fullscreenElement&&docEl.requestFullscreen){
         docEl.requestFullscreen({navigationUI:'hide'}).then(()=>{
             if(screen.orientation&&screen.orientation.lock)screen.orientation.lock('landscape').catch(()=>{});
-            setTimeout(resizeGameCanvas,60);setTimeout(resizeGameCanvas,220);
+            setTimeout(resizeGameCanvas,50);setTimeout(resizeGameCanvas,200);
         }).catch(()=>resizeGameCanvas());
     }else resizeGameCanvas();
 }
 
-document.addEventListener('fullscreenchange',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,100);});
+document.addEventListener('fullscreenchange',()=>{
+    resizeGameCanvas();
+    setTimeout(resizeGameCanvas,120);
+    setTimeout(resizeGameCanvas,300);
+});
+
+if(window.visualViewport){
+    window.visualViewport.addEventListener('resize',resizeGameCanvas);
+    window.visualViewport.addEventListener('scroll',resizeGameCanvas);
+}
 
 function triggerEpoch250BigRedWarning(){
     gameState.ep250WarnTriggered=true;
@@ -1517,11 +1668,26 @@ function triggerEpoch250BigRedWarning(){
 
 function startGameSession(startEpochOverride=1){
     ensureAudioEngine();
+    if(!currentPilot.isCore){
+        const idInp=document.getElementById('pilotIdInput');
+        const gInp=document.getElementById('guestCallsignInput');
+        if(idInp&&/^\d{4}$/.test(idInp.value.trim())){
+            customGuestId=idInp.value.trim();
+            localStorage.setItem('roadSense_overdrive_customGuestId',customGuestId);
+        }else{
+            ensureGuestHas4DigitId();
+        }
+        if(gInp&&gInp.value.trim())updateGuestCallsign(gInp.value.trim());
+    }
     requestMobileFullscreenSafe();
     resizeGameCanvas();
+    if(controlConfig.mobileMode==='tilt')calibrateTiltSensor(true);
+
     isAccountSessionLocked=true;
     localStorage.setItem('roadSense_overdrive_accountLocked','true');
     ['startModal','pauseSettingsModal','leaderboardModal','gameOverModal','epoch250RedAlertModal'].forEach(id=>document.getElementById(id).style.display='none');
+    try{if(isMobileHardware)history.pushState({inGame:true},'');}catch(e){}
+
     const initEpoch=Math.max(1,Math.floor(startEpochOverride||1));
     Object.assign(gameState,{
         running:true,paused:false,score:0,epoch:initEpoch,combo:1.0,nearMisses:0,
@@ -1571,7 +1737,7 @@ function exitGamePortal(){
 function checkPhantomFlashNearMiss(prevLane){
     for(let i=0;i<gameState.hazards.length;i++){
         const h=gameState.hazards[i];
-        if(!h.nearMissed&&Math.abs(h.lane-prevLane)<0.65&&h.z>EGO_Z_REAR&&h.z<9.5){
+        if(!h.nearMissed&&Math.abs(h.lane-prevLane)<0.72&&h.z>EGO_Z_REAR&&h.z<10.5){
             h.nearMissed=true;gameState.nearMisses++;
             gameState.combo=Math.min(8.0,+(gameState.combo+0.5).toFixed(1));
             const bonus=Math.round(250*gameState.combo);
@@ -1658,10 +1824,16 @@ function updateGamePhysics(dt,now){
     gameState.score+=Math.round(gameState.speedMps*effDt*gameState.combo*diff.scoreMul*1.35);
     updateEngineSoundPitch();
 
-    gameState.targetLane=Math.max(-2,Math.min(2,Math.round(gameState.targetLane)));
-    const laneDiff=gameState.targetLane-gameState.egoLaneX;
-    if(Math.abs(laneDiff)<0.006){gameState.egoLaneX=gameState.targetLane;gameState.egoRoll=0;}
-    else{gameState.egoLaneX+=laneDiff*Math.min(1,dt*15);gameState.egoRoll+=(laneDiff*0.12-gameState.egoRoll)*Math.min(1,dt*12);}
+    const isDirectMode=isMobileHardware&&(controlConfig.mobileMode==='drag'||controlConfig.mobileMode==='tilt');
+    if(!isDirectMode||!dragActive){
+        gameState.targetLane=Math.max(-2,Math.min(2,isDirectMode?gameState.targetLane:Math.round(gameState.targetLane)));
+        const laneDiff=gameState.targetLane-gameState.egoLaneX;
+        const snapRate=isDirectMode?28:22;
+        if(Math.abs(laneDiff)<0.004){gameState.egoLaneX=gameState.targetLane;gameState.egoRoll*=0.8;}
+        else{gameState.egoLaneX+=laneDiff*Math.min(1,dt*snapRate);gameState.egoRoll+=(laneDiff*0.14-gameState.egoRoll)*Math.min(1,dt*18);}
+    }else{
+        gameState.egoRoll*=0.85;
+    }
 
     if(gameState.screenShake>0)gameState.screenShake=Math.max(0,gameState.screenShake-dt*28);
     if(gameState.empWaveRadius>0){gameState.empWaveRadius+=dt*1400;if(gameState.empWaveRadius>1500)gameState.empWaveRadius=0;}
@@ -1744,6 +1916,11 @@ function updateGamePhysics(dt,now){
         lastHudUpdateTime=now;
         updateHudDOM(false);
         if(!isHudHidden)renderMiniRadar();
+        const curBest=getActiveAccountStats().bestScore||0;
+        if(gameState.score>curBest&&now-lastLiveLbPushTime>4500){
+            lastLiveLbPushTime=now;
+            recordScoreToLeaderboard(gameState.score,gameState.epoch,true);
+        }
     }
 }
 
@@ -1752,7 +1929,7 @@ function triggerGameOver(){
     document.getElementById('epoch250RedAlertModal').style.display='none';
     syncExternalTrackPlayback();updateEngineSoundPitch();
     saveActiveAccountStats(gameState.score,gameState.epoch,gameState.nearMisses);
-    recordScoreToLeaderboard(gameState.score,gameState.epoch);
+    recordScoreToLeaderboard(gameState.score,gameState.epoch,true);
     const st=getActiveAccountStats();
     document.getElementById('finalScoreVal').innerText=gameState.score.toLocaleString();
     document.getElementById('finalBestVal').innerText=(st.bestScore||gameState.score).toLocaleString();
@@ -1794,7 +1971,7 @@ function updateHudDOM(force=false){
         const wb=document.getElementById('hudWarningBadge');
         if(wb){
             wb.innerText=warnTier;
-            wb.className=warnTier==='CRITICAL'?"px-1.5 py-0.5 rounded text-[8.5px] sm:text-[10px] font-bold bg-red-950 text-red-400 border border-red-500":(warnTier==='WARNING'?"px-1.5 py-0.5 rounded text-[8.5px] sm:text-[10px] font-bold bg-orange-950 text-orange-400 border border-orange-500":(warnTier==='CAUTION'?"px-1.5 py-0.5 rounded text-[8.5px] sm:text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-500":"px-1.5 py-0.5 rounded text-[8.5px] sm:text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-700"));
+            wb.className=warnTier==='CRITICAL'?"px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-bold bg-red-950 text-red-400 border border-red-500 whitespace-nowrap shrink-0":(warnTier==='WARNING'?"px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-bold bg-orange-950 text-orange-400 border border-orange-500 whitespace-nowrap shrink-0":(warnTier==='CAUTION'?"px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-bold bg-amber-950 text-amber-300 border border-amber-500 whitespace-nowrap shrink-0":"px-1.5 py-0.5 rounded text-[8px] sm:text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-700 whitespace-nowrap shrink-0"));
         }
     }
     if(lead){
@@ -1922,7 +2099,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
         ctx.strokeStyle="rgba(16,185,129,0.42)";ctx.lineWidth=1.2;
         for(let x=cx-spanW;x<=cx+spanW;x+=18){
             const norm=(x-cx)/spanW;
-            const cableY= (horizonY-towerH) + (1-norm*norm)*(deckY-(horizonY-towerH)-6);
+            const cableY=(horizonY-towerH)+(1-norm*norm)*(deckY-(horizonY-towerH)-6);
             ctx.beginPath();ctx.moveTo(x,cableY);ctx.lineTo(x,deckY);ctx.stroke();
         }
         ctx.strokeStyle="#10b981";ctx.lineWidth=2.4;
@@ -1970,7 +2147,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
             }
         }
         const peaks=[[-0.38,0.11],[-0.22,0.18],[-0.08,0.13],[0.0,0.22],[0.11,0.14],[0.25,0.19],[0.39,0.12]];
-        peaks.forEach(([ox,oh],idx)=>{
+        peaks.forEach(([ox,oh])=>{
             const px=cx+ox*W,pw=W*0.13,ph=H*oh;
             ctx.fillStyle="#041529";ctx.strokeStyle="#7dd3fc";ctx.lineWidth=1.4;
             ctx.beginPath();ctx.moveTo(px-pw,horizonY);ctx.lineTo(px,horizonY-ph);ctx.lineTo(px+pw,horizonY);ctx.closePath();ctx.fill();ctx.stroke();
@@ -1978,18 +2155,59 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
             ctx.beginPath();ctx.moveTo(px,horizonY-ph);ctx.lineTo(px+pw,horizonY);ctx.lineTo(px+pw*0.15,horizonY);ctx.closePath();ctx.fill();
         });
     }else if(hType==="bio"){
-        const mr=u*0.095,mcy=horizonY-mr*1.35;
-        ctx.fillStyle="#062e16";ctx.strokeStyle="#4ade80";ctx.lineWidth=2.2;
-        ctx.beginPath();ctx.arc(cx,mcy,mr,0,Math.PI*2);ctx.fill();ctx.stroke();
-        ctx.strokeStyle="rgba(74,222,128,0.38)";ctx.lineWidth=1.2;
-        ctx.beginPath();ctx.arc(cx-mr*0.25,mcy-mr*0.15,mr*0.35,0,Math.PI*2);ctx.arc(cx+mr*0.3,mcy+mr*0.2,mr*0.22,0,Math.PI*2);ctx.stroke();
-        [-0.34,-0.19,0.19,0.34].forEach((ox,i)=>{
-            const mx=cx+ox*W,stemH=H*(i%2===0?0.09:0.13),capR=u*(i%2===0?0.045:0.062);
-            ctx.fillStyle="#041f11";ctx.strokeStyle="#22c55e";ctx.lineWidth=1.4;
-            ctx.beginPath();ctx.moveTo(mx-5,horizonY);ctx.quadraticCurveTo(mx+(i%2?4:-4),horizonY-stemH*0.5,mx-3,horizonY-stemH);
-            ctx.lineTo(mx+3,horizonY-stemH);ctx.quadraticCurveTo(mx+(i%2?4:-4),horizonY-stemH*0.5,mx+5,horizonY);ctx.closePath();ctx.fill();ctx.stroke();
-            ctx.fillStyle="#0b3b21";ctx.strokeStyle="#4ade80";ctx.lineWidth=1.8;
-            ctx.beginPath();ctx.ellipse(mx,horizonY-stemH,capR,capR*0.42,0,Math.PI,0,false);ctx.closePath();ctx.fill();ctx.stroke();
+        const mr=u*0.095,mcy=horizonY-mr*1.25;
+        const pulse=1+Math.sin(now*0.0035)*0.08;
+        if(gfxSettings.pillars){
+            for(let b=-2;b<=2;b++){
+                if(b===0)continue;
+                const bx=cx+b*(W*0.18)+Math.sin(now*0.0015+b)*10;
+                ctx.fillStyle="rgba(74,222,128,0.11)";
+                ctx.fillRect(bx-5,0,10,horizonY);
+            }
+        }
+        ctx.save();
+        ctx.translate(cx,mcy);
+        ctx.fillStyle="#032211";ctx.strokeStyle="#4ade80";ctx.lineWidth=2.2;
+        ctx.beginPath();ctx.arc(0,0,mr*pulse,0,Math.PI*2);ctx.fill();ctx.stroke();
+        ctx.fillStyle="rgba(34,197,94,0.38)";
+        ctx.beginPath();ctx.arc(0,0,mr*0.58*pulse,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle="#bbf7d0";
+        ctx.beginPath();ctx.arc(0,0,mr*0.24*pulse,0,Math.PI*2);ctx.fill();
+        for(let r=0;r<2;r++){
+            ctx.save();
+            ctx.rotate(now*(r===0?0.0012:-0.0015)+r*1.1);
+            ctx.strokeStyle=r===0?"#4ade80":"#00f5d4";
+            ctx.lineWidth=1.8;
+            ctx.beginPath();ctx.ellipse(0,0,mr*1.48,mr*0.38,0,0,Math.PI*2);ctx.stroke();
+            for(let n=0;n<6;n++){
+                const a=(n/6)*Math.PI*2;
+                ctx.fillStyle="#fef08a";
+                ctx.beginPath();ctx.arc(Math.cos(a)*mr*1.48,Math.sin(a)*mr*0.38,2.5,0,Math.PI*2);ctx.fill();
+            }
+            ctx.restore();
+        }
+        ctx.restore();
+        [-0.35,-0.20,0.20,0.35].forEach((ox,i)=>{
+            const sway=Math.sin(now*0.0022+i)*6;
+            const mx=cx+ox*W+sway,stemH=H*(i%2===0?0.10:0.145),capR=u*(i%2===0?0.052:0.072);
+            const topY=horizonY-stemH;
+            ctx.fillStyle="#041f11";ctx.strokeStyle="#22c55e";ctx.lineWidth=1.6;
+            ctx.beginPath();
+            ctx.moveTo(cellX=cx+ox*W-6,horizonY);
+            ctx.quadraticCurveTo(mx-2,horizonY-stemH*0.5,mx-4,topY);
+            ctx.lineTo(mx+4,topY);
+            ctx.quadraticCurveTo(mx+2,horizonY-stemH*0.5,cx+ox*W+6,horizonY);
+            ctx.closePath();ctx.fill();ctx.stroke();
+            ctx.fillStyle="#06371c";ctx.strokeStyle="#4ade80";ctx.lineWidth=2;
+            ctx.beginPath();ctx.ellipse(mx,topY,capR,capR*0.44,0,Math.PI,0,false);ctx.closePath();ctx.fill();ctx.stroke();
+            ctx.strokeStyle="rgba(187,247,208,0.45)";ctx.lineWidth=1;
+            for(let g=-2;g<=2;g++){
+                ctx.beginPath();ctx.moveTo(mx,topY-capR*0.38);ctx.lineTo(mx+g*(capR*0.36),topY);ctx.stroke();
+                const tendrilH=10+Math.sin(now*0.004+i+g)*5;
+                ctx.strokeStyle="rgba(0,245,212,0.55)";
+                ctx.beginPath();ctx.moveTo(mx+g*(capR*0.32),topY);ctx.lineTo(mx+g*(capR*0.32)+sway*0.4,topY+tendrilH);ctx.stroke();
+                ctx.strokeStyle="rgba(187,247,208,0.45)";
+            }
         });
     }else if(hType==="eclipse"){
         const r=u*0.105,ecy=horizonY-r*1.12;
@@ -1997,7 +2215,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
         ctx.beginPath();ctx.arc(cx,ecy,r*1.14,0,Math.PI*2);ctx.stroke();
         ctx.fillStyle="#040002";ctx.strokeStyle="#fb7185";ctx.lineWidth=2.5;
         ctx.beginPath();ctx.arc(cx,ecy,r,0,Math.PI*2);ctx.fill();ctx.stroke();
-        ctx.fillStyle="#ffffff";ctx.beginPath();ctx.arc(cx+r*0.72,ecy-r*0.68,5,0,Math.PI*2);ctx.fill();
+        ctx.fillStyle="#ffffff";ctx.beginPath();ctx.arc(cx+r*0.72,ecy-r*0.68,5+Math.sin(now*0.005)*1.5,0,Math.PI*2);ctx.fill();
         for(let s=-5;s<=5;s++){
             if(s===0)continue;
             const sx=cx+s*(W*0.075),sh=H*(Math.abs(s)%2===1?0.15:0.10);
@@ -2070,7 +2288,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
         ctx.save();ctx.translate(cx,cy);
         ctx.strokeStyle="#22c55e";ctx.lineWidth=2;
         ctx.beginPath();ctx.arc(0,0,mr*1.18,0,Math.PI*2);ctx.stroke();
-        ctx.rotate(now*0.0006);
+        ctx.rotate(now*0.0008);
         ctx.fillStyle="#021407";
         ctx.beginPath();ctx.moveTo(0,-mr);ctx.lineTo(mr,0);ctx.lineTo(0,mr);ctx.lineTo(-mr,0);ctx.closePath();ctx.fill();ctx.stroke();
         ctx.strokeRect(-mr*0.55,-mr*0.55,mr*1.1,mr*1.1);
@@ -2084,7 +2302,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
         for(let b=-3;b<=3;b++){ctx.fillRect(cx-r,cy+b*(r*0.24),r*2,r*0.11);}
         ctx.restore();
         ctx.strokeStyle="#818cf8";ctx.lineWidth=2;ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);ctx.stroke();
-        ctx.save();ctx.translate(cx,cy);ctx.rotate(-0.18);
+        ctx.save();ctx.translate(cx,cy);ctx.rotate(-0.18+Math.sin(now*0.0005)*0.03);
         for(let ring=0;ring<3;ring++){
             ctx.strokeStyle=ring===1?"rgba(199,210,254,0.85)":"rgba(129,140,248,0.55)";
             ctx.lineWidth=ring===1?3.5:1.8;
@@ -2524,42 +2742,80 @@ function renderSceneFrame(now){
 function escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
 
 window.addEventListener('resize',resizeGameCanvas);
-window.addEventListener('orientationchange',()=>setTimeout(resizeGameCanvas,80));
+window.addEventListener('orientationchange',()=>{setTimeout(resizeGameCanvas,60);setTimeout(resizeGameCanvas,220);});
+window.addEventListener('pageshow',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,120);});
+window.addEventListener('focus',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,120);});
+window.addEventListener('popstate',()=>{
+    if(gameState.running&&!gameState.paused){
+        openPauseSettingsModal('game');
+        resizeGameCanvas();
+    }
+});
 
 document.addEventListener('visibilitychange',()=>{
-    if(document.hidden){syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);}
-    else if(gameState.running&&!gameState.paused){syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);}
+    if(document.hidden){
+        syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
+    }else{
+        resizeGameCanvas();
+        setTimeout(resizeGameCanvas,120);
+        if(controlConfig.mobileMode==='tilt')needsSilentGyroCalib=true;
+        if(gameState.running&&!gameState.paused){
+            syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);
+        }
+    }
 });
 
 window.addEventListener('deviceorientation',(e)=>{
     if(e.beta===null&&e.gamma===null)return;
     const angle=(screen.orientation&&typeof screen.orientation.angle==='number')?screen.orientation.angle:(typeof window.orientation==='number'?window.orientation:0);
-    let raw=e.beta||0;
-    if(angle===270||angle===-90)raw=-raw;
+    let raw=0;
+    if(angle===90)raw=e.beta||0;
+    else if(angle===270||angle===-90)raw=-(e.beta||0);
+    else raw=(window.innerHeight>window.innerWidth)?(e.beta||0):(e.gamma||0);
     if(controlConfig.invertGyro)raw=-raw;
     lastRawLandscapeTilt=raw;
-    smoothedGyroDelta+=((raw-controlConfig.tiltCenterOffset)-smoothedGyroDelta)*0.22;
+    hasGyroReading=true;
+    if(needsSilentGyroCalib){
+        controlConfig.tiltCenterOffset=raw;
+        smoothedGyroDelta=0;
+        needsSilentGyroCalib=false;
+    }
+    const rawDelta=raw-controlConfig.tiltCenterOffset;
+    smoothedGyroDelta+=(rawDelta-smoothedGyroDelta)*0.68;
     if(controlConfig.mobileMode==='tilt'){
         const lbl=document.getElementById('gyroLiveAngleLabel');
         if(lbl)lbl.innerText=`${smoothedGyroDelta>0.2?'+':''}${smoothedGyroDelta.toFixed(1)}°`;
     }
     if(!gameState.running||gameState.paused||controlConfig.mobileMode!=='tilt')return;
-    const degPerLane=17.0-(controlConfig.gyroSensitivity*11.5);
-    setDiscreteTargetLane(Math.max(-2,Math.min(2,Math.round(smoothedGyroDelta/Math.max(5.0,degPerLane)))));
+    const maxTiltDeg=18.5-(controlConfig.gyroSensitivity*11.5);
+    const continuousLane=Math.max(-2,Math.min(2,(smoothedGyroDelta/Math.max(4.5,maxTiltDeg))*2.0));
+    setContinuousOrDiscreteLane(continuousLane,false);
 });
 
 canvas.addEventListener('pointerdown',(e)=>{
+    if(isMobileHardware&&gameState.running&&!document.fullscreenElement){
+        requestMobileFullscreenSafe();
+    }
     if(!gameState.running||gameState.paused)return;
     const now=performance.now();
-    if(controlConfig.doubleTapNitro&&(now-controlConfig.lastTouchTime<280)){
+    if(controlConfig.doubleTapNitro&&(now-controlConfig.lastTouchTime<260)){
         setBoosting(true);setTimeout(()=>setBoosting(false),1100);
     }
     controlConfig.lastTouchTime=now;
-    if(controlConfig.mobileMode==='drag')handleCanvasPointerDrag(e);
+    if(controlConfig.mobileMode==='drag')handleCanvasPointerDownDrag(e);
 });
 
 canvas.addEventListener('pointermove',(e)=>{
-    if(gameState.running&&!gameState.paused&&controlConfig.mobileMode==='drag'&&e.buttons>0)handleCanvasPointerDrag(e);
+    if(gameState.running&&!gameState.paused&&controlConfig.mobileMode==='drag'&&(dragActive||e.buttons>0)){
+        handleCanvasPointerMoveDrag(e);
+    }
+});
+
+window.addEventListener('pointerup',()=>{
+    if(dragActive){
+        dragActive=false;
+        gameState.targetLane=Math.round(gameState.egoLaneX);
+    }
 });
 
 window.addEventListener('keydown',(e)=>{
@@ -2610,6 +2866,7 @@ resizeGameCanvas();
 updateTopLeaderBanner();
 renderMiniRadar();
 pullGlobalCloudLeaderboard();
+startLiveLeaderboardStream();
 
 let lastFrameTime=performance.now();
 function mainLoop(now){
