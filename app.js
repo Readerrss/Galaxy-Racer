@@ -19,6 +19,8 @@ function detectDeviceHardware(){
     if(scanLbl)scanLbl.innerText=`🔍 Device Scan: ${cores} Cores • ${recommendedPresetKey.toUpperCase()} (Recommended)`;
     const ctrlHeader=document.getElementById('ctrlPlatformHeaderLabel');
     if(ctrlHeader)ctrlHeader.innerText=isMobileHardware?"📱 Mobile / Android Touch & Gyro Controls":"⌨️ PC Keyboard Controls & Keybinds";
+    const tapLaneBtn=document.getElementById('mobCtrl_drag');
+    if(tapLaneBtn)tapLaneBtn.innerText="👆 Tap Lane";
 }
 
 function toggleGameHudVisibility(){
@@ -45,7 +47,6 @@ for(let i=0;i<85;i++){
 
 let spawnAccumulator=0,pickupAccumulator=0,radarAngle=Math.PI;
 let lastRawLandscapeTilt=0,smoothedGyroDelta=0,needsSilentGyroCalib=true,hasGyroReading=false;
-let dragActive=false,dragAnchorNormX=0,dragAnchorLane=0,smoothedDragNormX=0;
 let awaitingRebindAction=null,lastHudUpdateTime=0,lastLiveLbPushTime=0;
 const domCache={};
 let cachedGradients={key:'',sky:null,sun:null};
@@ -486,6 +487,7 @@ function toggleAutoBiomeCycle(){
 
 const audioSettings={master:0.95,music:0.90,menuMusic:0.85,engine:0.80,sfx:0.92,uiClick:0.85,ostMode:'synth'};
 let audioCtx=null,masterGainNode=null,musicBusNode=null,sfxBusNode=null,compressorNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0,lastMenuNoteAt=0;
+const lastSfxTime={};
 
 function isAppAudible(){
     return document.visibilityState!=='hidden'&&!document.hidden;
@@ -658,7 +660,7 @@ function playSingleMenuStep(){
     if(!isAppAudible()||!audioCtx||audioCtx.state!=='running'||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01)return;
     if(gameState.running&&!gameState.paused)return;
     const nowPerf=performance.now();
-    if(nowPerf-lastMenuNoteAt<85)return;
+    if(nowPerf-lastMenuNoteAt<95)return;
     lastMenuNoteAt=nowPerf;
     try{
         const outNode=musicBusNode||masterGainNode;
@@ -669,40 +671,46 @@ function playSingleMenuStep(){
         mOsc1.type='triangle';mOsc2.type='sine';
         mOsc1.frequency.setValueAtTime(note,now);
         mOsc2.frequency.setValueAtTime(note*0.5,now);
-        mGain.gain.setValueAtTime(0.34*mmVol,now);
-        mGain.gain.exponentialRampToValueAtTime(0.002,now+0.21);
+        mGain.gain.setValueAtTime(0.001,now);
+        mGain.gain.linearRampToValueAtTime(0.24*mmVol,now+0.008);
+        mGain.gain.exponentialRampToValueAtTime(0.001,now+0.20);
         mOsc1.connect(mGain);mOsc2.connect(mGain);mGain.connect(outNode);
-        mOsc1.start(now);mOsc2.start(now);mOsc1.stop(now+0.21);mOsc2.stop(now+0.21);
+        mOsc1.start(now);mOsc2.start(now);mOsc1.stop(now+0.205);mOsc2.stop(now+0.205);
         if(m16%2===0){
             const bNote=MENU_BASS_NOTES[(m16>>1)%MENU_BASS_NOTES.length];
             const mbOsc=audioCtx.createOscillator(),mbFilter=audioCtx.createBiquadFilter(),mbGain=audioCtx.createGain();
             mbOsc.type='sawtooth';mbOsc.frequency.setValueAtTime(bNote,now);
-            mbFilter.type='lowpass';mbFilter.frequency.setValueAtTime(430,now);
-            mbGain.gain.setValueAtTime(0.28*mmVol,now);
-            mbGain.gain.exponentialRampToValueAtTime(0.002,now+0.22);
+            mbFilter.type='lowpass';mbFilter.frequency.setValueAtTime(380,now);
+            mbGain.gain.setValueAtTime(0.001,now);
+            mbGain.gain.linearRampToValueAtTime(0.20*mmVol,now+0.008);
+            mbGain.gain.exponentialRampToValueAtTime(0.001,now+0.21);
             mbOsc.connect(mbFilter);mbFilter.connect(mbGain);mbGain.connect(outNode);
-            mbOsc.start(now);mbOsc.stop(now+0.22);
+            mbOsc.start(now);mbOsc.stop(now+0.215);
         }
         menuStep++;
     }catch(e){}
 }
 
 function ensureAudioEngine(){
+    if(audioCtx&&audioCtx.state==='running')return audioCtx;
     if(!audioCtx){
         const AC=window.AudioContext||window.webkitAudioContext;
         if(!AC)return null;
         audioCtx=new AC();
         compressorNode=audioCtx.createDynamicsCompressor();
-        compressorNode.threshold.setValueAtTime(-8,audioCtx.currentTime);
-        compressorNode.knee.setValueAtTime(12,audioCtx.currentTime);
-        compressorNode.ratio.setValueAtTime(2.8,audioCtx.currentTime);
+        compressorNode.threshold.setValueAtTime(-2.5,audioCtx.currentTime);
+        compressorNode.knee.setValueAtTime(6,audioCtx.currentTime);
+        compressorNode.ratio.setValueAtTime(12.0,audioCtx.currentTime);
+        compressorNode.attack.setValueAtTime(0.002,audioCtx.currentTime);
+        compressorNode.release.setValueAtTime(0.08,audioCtx.currentTime);
+
         masterGainNode=audioCtx.createGain();
-        masterGainNode.gain.setValueAtTime(audioSettings.master*1.65,audioCtx.currentTime);
+        masterGainNode.gain.setValueAtTime(audioSettings.master,audioCtx.currentTime);
 
         musicBusNode=audioCtx.createGain();
-        musicBusNode.gain.setValueAtTime(1.0,audioCtx.currentTime);
+        musicBusNode.gain.setValueAtTime(0.92,audioCtx.currentTime);
         sfxBusNode=audioCtx.createGain();
-        sfxBusNode.gain.setValueAtTime(0.95,audioCtx.currentTime);
+        sfxBusNode.gain.setValueAtTime(0.72,audioCtx.currentTime);
 
         musicBusNode.connect(masterGainNode);
         sfxBusNode.connect(masterGainNode);
@@ -718,7 +726,7 @@ function ensureAudioEngine(){
         engineOsc1.frequency.setValueAtTime(73.42,audioCtx.currentTime);
         engineOsc2.frequency.setValueAtTime(146.83,audioCtx.currentTime);
         engineFilter.type='lowpass';
-        engineFilter.frequency.setValueAtTime(260,audioCtx.currentTime);
+        engineFilter.frequency.setValueAtTime(240,audioCtx.currentTime);
         engineGain.gain.setValueAtTime(0.0001,audioCtx.currentTime);
         engineOsc1.connect(engineFilter);
         engineOsc2.connect(engineFilter);
@@ -728,19 +736,15 @@ function ensureAudioEngine(){
         engineOsc2.start();
         startUnifiedMusicScheduler();
     }
-    if(isAppAudible()){
-        if(audioCtx.state==='suspended'){
-            try{
-                const buf=audioCtx.createBuffer(1,1,22050);
-                const src=audioCtx.createBufferSource();
-                src.buffer=buf;src.connect(audioCtx.destination);src.start(0);
-            }catch(e){}
-            audioCtx.resume().then(()=>{
-                playSingleMenuStep();
-            }).catch(()=>{});
-        }else if(audioCtx.state==='running'&&(!gameState.running||gameState.paused)){
-            playSingleMenuStep();
-        }
+    if(isAppAudible()&&audioCtx.state!=='running'){
+        try{
+            const buf=audioCtx.createBuffer(1,1,22050);
+            const src=audioCtx.createBufferSource();
+            src.buffer=buf;src.connect(audioCtx.destination);src.start(0);
+        }catch(e){}
+        audioCtx.resume().then(()=>{
+            if(!gameState.running||gameState.paused)playSingleMenuStep();
+        }).catch(()=>{});
     }
     return audioCtx;
 }
@@ -776,7 +780,7 @@ function updateEngineSoundPitch(){
     const baseFreq=36.71*speedRatio+(gameState.boosting?18.35:0);
     engineOsc1.frequency.setTargetAtTime(baseFreq,now,0.05);
     engineOsc2.frequency.setTargetAtTime(baseFreq*2.0,now,0.05);
-    const targetVol=0.14*audioSettings.engine*(gameState.boosting?1.3:0.9);
+    const targetVol=0.10*audioSettings.engine*(gameState.boosting?1.25:0.85);
     engineGain.gain.setTargetAtTime(Math.max(0.0001,targetVol),now,0.06);
 }
 
@@ -804,25 +808,29 @@ function startUnifiedMusicScheduler(){
                 const kOsc=audioCtx.createOscillator(),kGain=audioCtx.createGain();
                 kOsc.type='sine';
                 kOsc.frequency.setValueAtTime(146.83,now);
-                kOsc.frequency.exponentialRampToValueAtTime(36.71,now+0.14);
-                kGain.gain.setValueAtTime(0.68*mVol,now);
-                kGain.gain.exponentialRampToValueAtTime(0.001,now+0.15);
+                kOsc.frequency.exponentialRampToValueAtTime(36.71,now+0.13);
+                kGain.gain.setValueAtTime(0.001,now);
+                kGain.gain.linearRampToValueAtTime(0.46*mVol,now+0.005);
+                kGain.gain.exponentialRampToValueAtTime(0.001,now+0.14);
                 kOsc.connect(kGain);kGain.connect(outNode);
-                kOsc.start(now);kOsc.stop(now+0.15);
+                kOsc.start(now);kOsc.stop(now+0.145);
             }else if(s16%4===2){
                 const sOsc=audioCtx.createOscillator(),sGain=audioCtx.createGain();
                 sOsc.type='triangle';
                 sOsc.frequency.setValueAtTime(220.0,now);
-                sOsc.frequency.exponentialRampToValueAtTime(73.42,now+0.09);
-                sGain.gain.setValueAtTime(0.32*mVol,now);
-                sGain.gain.exponentialRampToValueAtTime(0.001,now+0.095);
+                sOsc.frequency.exponentialRampToValueAtTime(73.42,now+0.085);
+                sGain.gain.setValueAtTime(0.001,now);
+                sGain.gain.linearRampToValueAtTime(0.22*mVol,now+0.005);
+                sGain.gain.exponentialRampToValueAtTime(0.001,now+0.09);
                 sOsc.connect(sGain);sGain.connect(outNode);
                 sOsc.start(now);sOsc.stop(now+0.095);
             }
             const bOsc=audioCtx.createOscillator(),bFilter=audioCtx.createBiquadFilter(),bGain=audioCtx.createGain();
             bOsc.type='sawtooth';bOsc.frequency.setValueAtTime(bassNotes[s16],now);
-            bFilter.type='lowpass';bFilter.frequency.setValueAtTime(760,now);
-            bGain.gain.setValueAtTime(0.42*mVol,now);bGain.gain.exponentialRampToValueAtTime(0.002,now+0.115);
+            bFilter.type='lowpass';bFilter.frequency.setValueAtTime(680,now);
+            bGain.gain.setValueAtTime(0.001,now);
+            bGain.gain.linearRampToValueAtTime(0.30*mVol,now+0.006);
+            bGain.gain.exponentialRampToValueAtTime(0.002,now+0.11);
             bOsc.connect(bFilter);bFilter.connect(bGain);bGain.connect(outNode);
             bOsc.start(now);bOsc.stop(now+0.115);
 
@@ -830,9 +838,11 @@ function startUnifiedMusicScheduler(){
             lOsc.type='sawtooth';lOsc2.type='triangle';
             lOsc.frequency.setValueAtTime(arpNotes[s16],now);
             lOsc2.frequency.setValueAtTime(arpNotes[s16]*1.004,now);
-            lGain.gain.setValueAtTime(0.30*mVol,now);lGain.gain.exponentialRampToValueAtTime(0.002,now+0.14);
+            lGain.gain.setValueAtTime(0.001,now);
+            lGain.gain.linearRampToValueAtTime(0.22*mVol,now+0.006);
+            lGain.gain.exponentialRampToValueAtTime(0.002,now+0.13);
             lOsc.connect(lGain);lOsc2.connect(lGain);lGain.connect(outNode);
-            lOsc.start(now);lOsc2.start(now);lOsc.stop(now+0.14);lOsc2.stop(now+0.14);
+            lOsc.start(now);lOsc2.start(now);lOsc.stop(now+0.135);lOsc2.stop(now+0.135);
             synthStep++;
         }catch(e){}
     },117);
@@ -884,7 +894,7 @@ function updateVolumeSetting(ch,val){
     if(lbl)lbl.innerText=`${Math.round(num*100)}%`;
     const sld=document.getElementById(`volSlider_${ch}`);
     if(sld&&String(sld.value)!==String(Math.round(num*100)))sld.value=Math.round(num*100);
-    if(masterGainNode&&audioCtx)masterGainNode.gain.setTargetAtTime(audioSettings.master*1.65,audioCtx.currentTime,0.03);
+    if(masterGainNode&&audioCtx)masterGainNode.gain.setTargetAtTime(audioSettings.master,audioCtx.currentTime,0.03);
     mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     updateEngineSoundPitch();
@@ -893,83 +903,105 @@ function updateVolumeSetting(ch,val){
 
 function playGameSfx(type){
     if(audioSettings.master<=0.01||!isAppAudible())return;
+    const nowPerf=performance.now();
+    if(lastSfxTime[type]&&nowPerf-lastSfxTime[type]<45)return;
+    lastSfxTime[type]=nowPerf;
     try{
         const actx=ensureAudioEngine();
-        if(!actx)return;
+        if(!actx||actx.state!=='running')return;
         const now=actx.currentTime,sVol=audioSettings.sfx,cVol=audioSettings.uiClick;
         const out=sfxBusNode||masterGainNode;
         if(type==='uiClick'){
             if(cVol<=0.01)return;
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='triangle';o.frequency.setValueAtTime(587.33,now);o.frequency.exponentialRampToValueAtTime(880.0,now+0.05);
-            g.gain.setValueAtTime(0.20*cVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.055);
+            o.type='sine';o.frequency.setValueAtTime(587.33,now);o.frequency.exponentialRampToValueAtTime(880.0,now+0.045);
+            g.gain.setValueAtTime(0.001,now);
+            g.gain.linearRampToValueAtTime(0.14*cVol,now+0.005);
+            g.gain.exponentialRampToValueAtTime(0.001,now+0.05);
             o.connect(g);g.connect(out);o.start(now);o.stop(now+0.055);
             return;
         }
         if(sVol<=0.01)return;
         if(type==='steer'){
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='triangle';o.frequency.setValueAtTime(349.23,now);o.frequency.exponentialRampToValueAtTime(587.33,now+0.055);
-            g.gain.setValueAtTime(0.20*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
+            o.type='sine';o.frequency.setValueAtTime(349.23,now);o.frequency.exponentialRampToValueAtTime(587.33,now+0.05);
+            g.gain.setValueAtTime(0.001,now);
+            g.gain.linearRampToValueAtTime(0.14*sVol,now+0.005);
+            g.gain.exponentialRampToValueAtTime(0.001,now+0.055);
             o.connect(g);g.connect(out);o.start(now);o.stop(now+0.06);
         }else if(type==='nitro'){
             [293.66,440.0,587.33].forEach((freq,idx)=>{
                 const o=actx.createOscillator(),g=actx.createGain();
-                o.type=idx===0?'sawtooth':'triangle';
+                o.type='triangle';
                 o.frequency.setValueAtTime(freq*0.5,now);
-                o.frequency.exponentialRampToValueAtTime(freq,now+0.18);
-                g.gain.setValueAtTime(0.16*sVol,now);
-                g.gain.exponentialRampToValueAtTime(0.001,now+0.22);
-                o.connect(g);g.connect(out);o.start(now);o.stop(now+0.22);
+                o.frequency.exponentialRampToValueAtTime(freq,now+0.16);
+                g.gain.setValueAtTime(0.001,now);
+                g.gain.linearRampToValueAtTime((idx===0?0.12:0.09)*sVol,now+0.008);
+                g.gain.exponentialRampToValueAtTime(0.001,now+0.20);
+                o.connect(g);g.connect(out);o.start(now);o.stop(now+0.205);
             });
         }else if(type==='siren250'){
             for(let c=0;c<6;c++){
                 const st=now+c*0.5,o=actx.createOscillator(),g=actx.createGain();
-                o.type='sawtooth';o.frequency.setValueAtTime(440.0,st);o.frequency.linearRampToValueAtTime(880.0,st+0.25);o.frequency.linearRampToValueAtTime(440.0,st+0.48);
-                g.gain.setValueAtTime(0.30*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
-                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.49);
+                o.type='triangle';o.frequency.setValueAtTime(440.0,st);o.frequency.linearRampToValueAtTime(880.0,st+0.25);o.frequency.linearRampToValueAtTime(440.0,st+0.48);
+                g.gain.setValueAtTime(0.001,st);
+                g.gain.linearRampToValueAtTime(0.22*sVol,st+0.01);
+                g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.495);
             }
         }else if(type==='phantom'){
             [587.33,698.46,880.0,1174.66].forEach((f,idx)=>{
                 const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.03;
                 o.type='triangle';o.frequency.setValueAtTime(f,st);
-                g.gain.setValueAtTime(0.28*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.24);
-                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.24);
+                g.gain.setValueAtTime(0.001,st);
+                g.gain.linearRampToValueAtTime(0.18*sVol,st+0.005);
+                g.gain.exponentialRampToValueAtTime(0.001,st+0.22);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.225);
             });
         }else if(type==='pickup'){
             [587.33,880.0,1174.66].forEach((f,idx)=>{
                 const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.035;
                 o.type='sine';o.frequency.setValueAtTime(f,st);
-                g.gain.setValueAtTime(0.25*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.15);
-                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.15);
+                g.gain.setValueAtTime(0.001,st);
+                g.gain.linearRampToValueAtTime(0.18*sVol,st+0.005);
+                g.gain.exponentialRampToValueAtTime(0.001,st+0.14);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.145);
             });
         }else if(type==='emp'){
             const o1=actx.createOscillator(),o2=actx.createOscillator(),g=actx.createGain();
             o1.type='sawtooth';o2.type='triangle';
-            o1.frequency.setValueAtTime(880.0,now);o1.frequency.exponentialRampToValueAtTime(73.42,now+0.55);
-            o2.frequency.setValueAtTime(1174.66,now);o2.frequency.exponentialRampToValueAtTime(146.83,now+0.55);
-            g.gain.setValueAtTime(0.32*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.58);
+            o1.frequency.setValueAtTime(880.0,now);o1.frequency.exponentialRampToValueAtTime(73.42,now+0.52);
+            o2.frequency.setValueAtTime(1174.66,now);o2.frequency.exponentialRampToValueAtTime(146.83,now+0.52);
+            g.gain.setValueAtTime(0.001,now);
+            g.gain.linearRampToValueAtTime(0.22*sVol,now+0.008);
+            g.gain.exponentialRampToValueAtTime(0.001,now+0.55);
             o1.connect(g);o2.connect(g);g.connect(out);
-            o1.start(now);o2.start(now);o1.stop(now+0.58);o2.stop(now+0.58);
+            o1.start(now);o2.start(now);o1.stop(now+0.56);o2.stop(now+0.56);
         }else if(type==='hit'){
             const o1=actx.createOscillator(),o2=actx.createOscillator(),flt=actx.createBiquadFilter(),g=actx.createGain();
             o1.type='sawtooth';o2.type='triangle';
-            o1.frequency.setValueAtTime(146.83,now);o1.frequency.exponentialRampToValueAtTime(36.71,now+0.26);
-            o2.frequency.setValueAtTime(220.0,now);o2.frequency.exponentialRampToValueAtTime(55.0,now+0.26);
-            flt.type='lowpass';flt.frequency.setValueAtTime(520,now);
-            g.gain.setValueAtTime(0.38*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.28);
+            o1.frequency.setValueAtTime(146.83,now);o1.frequency.exponentialRampToValueAtTime(36.71,now+0.24);
+            o2.frequency.setValueAtTime(220.0,now);o2.frequency.exponentialRampToValueAtTime(55.0,now+0.24);
+            flt.type='lowpass';flt.frequency.setValueAtTime(460,now);
+            g.gain.setValueAtTime(0.001,now);
+            g.gain.linearRampToValueAtTime(0.26*sVol,now+0.006);
+            g.gain.exponentialRampToValueAtTime(0.001,now+0.26);
             o1.connect(flt);o2.connect(flt);flt.connect(g);g.connect(out);
-            o1.start(now);o2.start(now);o1.stop(now+0.28);o2.stop(now+0.28);
+            o1.start(now);o2.start(now);o1.stop(now+0.27);o2.stop(now+0.27);
         }
     }catch(e){}
 }
 
-['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','keydown','keyup','wheel','click'].forEach(evt=>{
-    window.addEventListener(evt,()=>{ensureAudioEngine();},{capture:true,passive:true});
+function handleFirstGestureAudioUnlock(){
+    if(!audioCtx||audioCtx.state!=='running'){
+        ensureAudioEngine();
+    }
+}
+['touchstart','touchend','pointerdown','mousedown','keydown','click'].forEach(evt=>{
+    window.addEventListener(evt,handleFirstGestureAudioUnlock,{capture:true,passive:true});
 });
 
 document.addEventListener('pointerdown',(e)=>{
-    ensureAudioEngine();
     const btn=e.target.closest('button');
     if(btn&&!btn.disabled&&!btn.classList.contains('touch-paddle'))playGameSfx('uiClick');
 },{passive:true});
@@ -1460,6 +1492,8 @@ function setDifficulty(key){
 
 function setMobileControlMode(mode){
     controlConfig.mobileMode=mode;
+    const tapLaneBtn=document.getElementById('mobCtrl_drag');
+    if(tapLaneBtn)tapLaneBtn.innerText="👆 Tap Lane";
     ['buttons','drag','tilt'].forEach(m=>{
         const btn=document.getElementById(`mobCtrl_${m}`);
         if(btn)btn.className=(m===mode)?"p-2 rounded-lg text-[11px] font-bold bg-sky-500 text-black cursor-pointer text-center":"p-2 rounded-lg text-[11px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] cursor-pointer text-center";
@@ -1475,7 +1509,7 @@ function setMobileControlMode(mode){
     const mapSteer=document.getElementById('mapSteerDesc');
     if(mapTitle&&mapSteer){
         if(mode==='buttons'){mapTitle.innerText="ACTIVE CONTROL MAP // ARROW PADDLES";mapSteer.innerText="Left ◀ / ▶ Right Dock";}
-        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // FINGER DRAG";mapSteer.innerText="1:1 Direct Lane-Lock Finger Glide";}
+        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // TAP LANE";mapSteer.innerText="Tap Any Road Lane to Glide There";}
         else{mapTitle.innerText="ACTIVE CONTROL MAP // PHONE TILT (GYRO)";mapSteer.innerText="Auto-Zeroed Magnetic Lane-Lock Tilt";}
     }
     if(mode==='tilt'){
@@ -1589,35 +1623,37 @@ function setMagneticTargetLane(continuousFloat){
     return false;
 }
 
-function getPointerNormalizedX(e){
-    const vw=gameState.viewW||window.innerWidth||800;
+function getPointerGameCoords(e){
+    const W=gameState.viewW||window.innerWidth||800;
+    const H=gameState.viewH||window.innerHeight||450;
     const isRot=isMobileHardware&&(window.innerHeight>window.innerWidth);
-    return isRot?(e.clientY/Math.max(1,window.innerHeight)):(e.clientX/Math.max(1,vw));
+    if(isRot){
+        return {x:e.clientY,y:window.innerWidth-e.clientX,W,H};
+    }
+    return {x:e.clientX,y:e.clientY,W,H};
 }
 
-function handleCanvasPointerDownDrag(e){
-    dragActive=true;
-    const normX=getPointerNormalizedX(e);
-    dragAnchorNormX=normX;
-    smoothedDragNormX=normX;
-    dragAnchorLane=Math.round(gameState.targetLane);
-    if(normX>0.16&&normX<0.84){
-        const tappedLane=Math.max(-2,Math.min(2,Math.round((normX-0.5)*5.4)));
-        setDiscreteTargetLane(tappedLane);
-        dragAnchorLane=tappedLane;
+function handleCanvasTapLane(e){
+    const {x,y,W,H}=getPointerGameCoords(e);
+    const horizonY=H*0.42;
+    const roadCurve=Math.sin(gameState.distanceM*0.012)*0.65;
+    let zTap=EGO_Z_CENTER;
+    if(y>horizonY+12){
+        const scale=(y-horizonY)/(1.72*0.36);
+        zTap=Math.max(1.1,Math.min(18.0,(H*0.85)/Math.max(1,scale)));
     }
-}
-
-function handleCanvasPointerMoveDrag(e){
-    if(!dragActive)return;
-    const rawNormX=getPointerNormalizedX(e);
-    smoothedDragNormX+=(rawNormX-smoothedDragNormX)*0.65;
-    const deltaNorm=smoothedDragNormX-dragAnchorNormX;
-    const desiredFloat=Math.max(-2,Math.min(2,dragAnchorLane+deltaNorm*5.2));
-    if(setMagneticTargetLane(desiredFloat)){
-        dragAnchorNormX=smoothedDragNormX;
-        dragAnchorLane=Math.round(gameState.targetLane);
+    let bestLane=Math.round(gameState.targetLane);
+    let minDist=Infinity;
+    for(let i=0;i<LANES.length;i++){
+        const l=LANES[i];
+        const lx=projectX(l,zTap,W,H,roadCurve);
+        const d=Math.abs(x-lx);
+        if(d<minDist){
+            minDist=d;
+            bestLane=l;
+        }
     }
+    setDiscreteTargetLane(bestLane);
 }
 
 function startKeyRebind(actionKey){
@@ -1947,14 +1983,14 @@ function updateGamePhysics(dt,now){
 
     gameState.targetLane=Math.max(-2,Math.min(2,Math.round(gameState.targetLane)));
     const laneDiff=gameState.targetLane-gameState.egoLaneX;
-    const smoothAlpha=1-Math.exp(-19*dt);
+    const smoothAlpha=1-Math.exp(-18*dt);
     if(Math.abs(laneDiff)<0.003){
         gameState.egoLaneX=gameState.targetLane;
-        gameState.egoRoll*=Math.exp(-16*dt);
+        gameState.egoRoll*=Math.exp(-15*dt);
     }else{
         gameState.egoLaneX+=laneDiff*smoothAlpha;
         const targetRoll=Math.max(-0.18,Math.min(0.18,laneDiff*0.16));
-        gameState.egoRoll+=(targetRoll-gameState.egoRoll)*(1-Math.exp(-18*dt));
+        gameState.egoRoll+=(targetRoll-gameState.egoRoll)*(1-Math.exp(-16*dt));
     }
 
     if(gameState.screenShake>0)gameState.screenShake=Math.max(0,gameState.screenShake-dt*28);
@@ -2934,20 +2970,7 @@ canvas.addEventListener('pointerdown',(e)=>{
         setBoosting(true);setTimeout(()=>setBoosting(false),1100);
     }
     controlConfig.lastTouchTime=now;
-    if(controlConfig.mobileMode==='drag')handleCanvasPointerDownDrag(e);
-});
-
-canvas.addEventListener('pointermove',(e)=>{
-    if(gameState.running&&!gameState.paused&&controlConfig.mobileMode==='drag'&&(dragActive||e.buttons>0)){
-        handleCanvasPointerMoveDrag(e);
-    }
-});
-
-window.addEventListener('pointerup',()=>{
-    if(dragActive){
-        dragActive=false;
-        gameState.targetLane=Math.round(gameState.targetLane);
-    }
+    if(controlConfig.mobileMode==='drag')handleCanvasTapLane(e);
 });
 
 window.addEventListener('keydown',(e)=>{
