@@ -45,7 +45,7 @@ for(let i=0;i<85;i++){
 
 let spawnAccumulator=0,pickupAccumulator=0,radarAngle=Math.PI;
 let lastRawLandscapeTilt=0,smoothedGyroDelta=0,needsSilentGyroCalib=true,hasGyroReading=false;
-let dragActive=false,dragStartNormX=0,dragStartLane=0;
+let dragActive=false,dragAnchorNormX=0,dragAnchorLane=0,smoothedDragNormX=0;
 let awaitingRebindAction=null,lastHudUpdateTime=0,lastLiveLbPushTime=0;
 const domCache={};
 let cachedGradients={key:'',sky:null,sun:null};
@@ -284,7 +284,7 @@ function loginPilotById(){
         if(typedName){
             customGuestName=typedName;
         }else if(existingAcc&&existingAcc.name&&!existingAcc.name.startsWith('Pilot #')){
-            customGuestName=existingAcc.name.replace(/\s*\(#\d{4}\)$/, '');
+            customGuestName=existingAcc.name.replace(/\s*\(#\d{4}\)$/,'');
         }else{
             customGuestName="";
         }
@@ -485,7 +485,11 @@ function toggleAutoBiomeCycle(){
 }
 
 const audioSettings={master:0.95,music:0.90,menuMusic:0.85,engine:0.80,sfx:0.92,uiClick:0.85,ostMode:'synth'};
-let audioCtx=null,masterGainNode=null,compressorNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0;
+let audioCtx=null,masterGainNode=null,musicBusNode=null,sfxBusNode=null,compressorNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0,lastMenuNoteAt=0;
+
+function isAppAudible(){
+    return document.visibilityState!=='hidden'&&!document.hidden;
+}
 
 function buildVolumeSlidersUI(){
     const sliders=[
@@ -509,7 +513,7 @@ let mitadruIdx=0;
 mitadruAudio.addEventListener('error',()=>{
     if(audioSettings.ostMode!=='mitadru')return;
     mitadruIdx++;
-    if(mitadruIdx<mitadruCandidates.length){mitadruAudio.src=mitadruCandidates[mitadruIdx];mitadruAudio.play().catch(()=>{});}
+    if(mitadruIdx<mitadruCandidates.length){mitadruAudio.src=mitadruCandidates[mitadruIdx];if(isAppAudible()&&gameState.running&&!gameState.paused)mitadruAudio.play().catch(()=>{});}
 });
 
 const customAudio=new Audio();
@@ -647,52 +651,132 @@ async function renderDevCustomSongsList(){
     }catch(e){}
 }
 
+const MENU_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,293.66,261.63,349.23,440.00,523.25,440.00,349.23,329.63,293.66];
+const MENU_BASS_NOTES=[73.42,73.42,87.31,87.31,65.41,65.41,110.00,98.00];
+
+function playSingleMenuStep(){
+    if(!isAppAudible()||!audioCtx||audioCtx.state!=='running'||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01)return;
+    if(gameState.running&&!gameState.paused)return;
+    const nowPerf=performance.now();
+    if(nowPerf-lastMenuNoteAt<85)return;
+    lastMenuNoteAt=nowPerf;
+    try{
+        const outNode=musicBusNode||masterGainNode;
+        const now=audioCtx.currentTime,mmVol=audioSettings.menuMusic;
+        const m16=menuStep%16;
+        const note=MENU_ARP_NOTES[m16];
+        const mOsc1=audioCtx.createOscillator(),mOsc2=audioCtx.createOscillator(),mGain=audioCtx.createGain();
+        mOsc1.type='triangle';mOsc2.type='sine';
+        mOsc1.frequency.setValueAtTime(note,now);
+        mOsc2.frequency.setValueAtTime(note*0.5,now);
+        mGain.gain.setValueAtTime(0.34*mmVol,now);
+        mGain.gain.exponentialRampToValueAtTime(0.002,now+0.21);
+        mOsc1.connect(mGain);mOsc2.connect(mGain);mGain.connect(outNode);
+        mOsc1.start(now);mOsc2.start(now);mOsc1.stop(now+0.21);mOsc2.stop(now+0.21);
+        if(m16%2===0){
+            const bNote=MENU_BASS_NOTES[(m16>>1)%MENU_BASS_NOTES.length];
+            const mbOsc=audioCtx.createOscillator(),mbFilter=audioCtx.createBiquadFilter(),mbGain=audioCtx.createGain();
+            mbOsc.type='sawtooth';mbOsc.frequency.setValueAtTime(bNote,now);
+            mbFilter.type='lowpass';mbFilter.frequency.setValueAtTime(430,now);
+            mbGain.gain.setValueAtTime(0.28*mmVol,now);
+            mbGain.gain.exponentialRampToValueAtTime(0.002,now+0.22);
+            mbOsc.connect(mbFilter);mbFilter.connect(mbGain);mbGain.connect(outNode);
+            mbOsc.start(now);mbOsc.stop(now+0.22);
+        }
+        menuStep++;
+    }catch(e){}
+}
+
 function ensureAudioEngine(){
     if(!audioCtx){
-        audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+        const AC=window.AudioContext||window.webkitAudioContext;
+        if(!AC)return null;
+        audioCtx=new AC();
         compressorNode=audioCtx.createDynamicsCompressor();
-        compressorNode.threshold.setValueAtTime(-10,audioCtx.currentTime);
-        compressorNode.knee.setValueAtTime(10,audioCtx.currentTime);
-        compressorNode.ratio.setValueAtTime(3.5,audioCtx.currentTime);
+        compressorNode.threshold.setValueAtTime(-8,audioCtx.currentTime);
+        compressorNode.knee.setValueAtTime(12,audioCtx.currentTime);
+        compressorNode.ratio.setValueAtTime(2.8,audioCtx.currentTime);
         masterGainNode=audioCtx.createGain();
         masterGainNode.gain.setValueAtTime(audioSettings.master*1.65,audioCtx.currentTime);
+
+        musicBusNode=audioCtx.createGain();
+        musicBusNode.gain.setValueAtTime(1.0,audioCtx.currentTime);
+        sfxBusNode=audioCtx.createGain();
+        sfxBusNode.gain.setValueAtTime(0.95,audioCtx.currentTime);
+
+        musicBusNode.connect(masterGainNode);
+        sfxBusNode.connect(masterGainNode);
         masterGainNode.connect(compressorNode);
         compressorNode.connect(audioCtx.destination);
+
         engineOsc1=audioCtx.createOscillator();
         engineOsc2=audioCtx.createOscillator();
         const engineFilter=audioCtx.createBiquadFilter();
         engineGain=audioCtx.createGain();
         engineOsc1.type='sawtooth';
         engineOsc2.type='triangle';
-        engineOsc1.frequency.setValueAtTime(56,audioCtx.currentTime);
-        engineOsc2.frequency.setValueAtTime(112,audioCtx.currentTime);
+        engineOsc1.frequency.setValueAtTime(73.42,audioCtx.currentTime);
+        engineOsc2.frequency.setValueAtTime(146.83,audioCtx.currentTime);
         engineFilter.type='lowpass';
-        engineFilter.frequency.setValueAtTime(280,audioCtx.currentTime);
+        engineFilter.frequency.setValueAtTime(260,audioCtx.currentTime);
         engineGain.gain.setValueAtTime(0.0001,audioCtx.currentTime);
         engineOsc1.connect(engineFilter);
         engineOsc2.connect(engineFilter);
         engineFilter.connect(engineGain);
-        engineGain.connect(masterGainNode);
+        engineGain.connect(sfxBusNode);
         engineOsc1.start();
         engineOsc2.start();
         startUnifiedMusicScheduler();
     }
-    if(audioCtx.state==='suspended')audioCtx.resume();
+    if(isAppAudible()){
+        if(audioCtx.state==='suspended'){
+            try{
+                const buf=audioCtx.createBuffer(1,1,22050);
+                const src=audioCtx.createBufferSource();
+                src.buffer=buf;src.connect(audioCtx.destination);src.start(0);
+            }catch(e){}
+            audioCtx.resume().then(()=>{
+                playSingleMenuStep();
+            }).catch(()=>{});
+        }else if(audioCtx.state==='running'&&(!gameState.running||gameState.paused)){
+            playSingleMenuStep();
+        }
+    }
     return audioCtx;
+}
+
+function silenceAllAudioForBackground(){
+    mitadruAudio.pause();
+    customAudio.pause();
+    if(engineGain&&audioCtx){
+        try{engineGain.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.02);}catch(e){}
+    }
+    if(audioCtx&&audioCtx.state==='running'){
+        audioCtx.suspend().catch(()=>{});
+    }
+    updateEqVisuals(false);
+}
+
+function resumeAudioForForeground(){
+    if(!isAppAudible())return;
+    ensureAudioEngine();
+    syncExternalTrackPlayback();
+    updateEngineSoundPitch();
+    updateEqVisuals(gameState.running&&!gameState.paused);
 }
 
 function updateEngineSoundPitch(){
     if(!audioCtx||!engineOsc1||!engineGain)return;
     const now=audioCtx.currentTime;
-    if(!gameState.running||gameState.paused||document.hidden){
-        engineGain.gain.setTargetAtTime(0.0001,now,0.08);
+    if(!gameState.running||gameState.paused||!isAppAudible()){
+        engineGain.gain.setTargetAtTime(0.0001,now,0.05);
         return;
     }
-    const speedRatio=Math.max(0.5,Math.min(2.3,gameState.speedMps/30));
-    const baseFreq=52*speedRatio+(gameState.boosting?28:0);
+    const speedRatio=Math.max(0.6,Math.min(2.2,gameState.speedMps/28));
+    const baseFreq=36.71*speedRatio+(gameState.boosting?18.35:0);
     engineOsc1.frequency.setTargetAtTime(baseFreq,now,0.05);
-    engineOsc2.frequency.setTargetAtTime(baseFreq*2.02,now,0.05);
-    const targetVol=0.18*audioSettings.engine*(gameState.boosting?1.35:0.95);
+    engineOsc2.frequency.setTargetAtTime(baseFreq*2.0,now,0.05);
+    const targetVol=0.14*audioSettings.engine*(gameState.boosting?1.3:0.9);
     engineGain.gain.setTargetAtTime(Math.max(0.0001,targetVol),now,0.06);
 }
 
@@ -700,54 +784,46 @@ function startUnifiedMusicScheduler(){
     if(synthLoopTimer)clearInterval(synthLoopTimer);
     const bassNotes=[73.42,73.42,146.83,73.42,87.31,87.31,98.00,110.00,73.42,73.42,146.83,73.42,116.54,116.54,110.00,98.00];
     const arpNotes=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,440.00,293.66,349.23,466.16,587.33,659.25,587.33,440.00,349.23];
-    const menuChords=[220.00,261.63,329.63,392.00,293.66,349.23,440.00,523.25];
     synthLoopTimer=setInterval(()=>{
-        if(document.hidden||!audioCtx||audioCtx.state!=='running'||audioSettings.master<=0.01)return;
+        if(!isAppAudible()||!audioCtx||audioSettings.master<=0.01)return;
+        if(audioCtx.state==='suspended'){
+            audioCtx.resume().catch(()=>{});
+            return;
+        }
+        if(audioCtx.state!=='running')return;
         const isMenuOrPaused=!gameState.running||gameState.paused;
         if(isMenuOrPaused){
-            if(audioSettings.menuMusic<=0.01)return;
-            if(menuStep%2===0){
-                const now=audioCtx.currentTime;
-                const note=menuChords[(menuStep>>1)%menuChords.length];
-                const mOsc1=audioCtx.createOscillator(),mOsc2=audioCtx.createOscillator(),mGain=audioCtx.createGain();
-                mOsc1.type='triangle';mOsc2.type='sine';
-                mOsc1.frequency.setValueAtTime(note,now);
-                mOsc2.frequency.setValueAtTime(note*0.5,now);
-                mGain.gain.setValueAtTime(0.34*audioSettings.menuMusic,now);
-                mGain.gain.exponentialRampToValueAtTime(0.002,now+0.26);
-                mOsc1.connect(mGain);mOsc2.connect(mGain);mGain.connect(masterGainNode);
-                mOsc1.start(now);mOsc2.start(now);mOsc1.stop(now+0.26);mOsc2.stop(now+0.26);
-            }
-            menuStep++;
+            playSingleMenuStep();
             return;
         }
         if(audioSettings.ostMode!=='synth'||audioSettings.music<=0.01)return;
         try{
+            const outNode=musicBusNode||masterGainNode;
             const now=audioCtx.currentTime,mVol=audioSettings.music,s16=synthStep%16;
             if(s16%4===0){
                 const kOsc=audioCtx.createOscillator(),kGain=audioCtx.createGain();
                 kOsc.type='sine';
-                kOsc.frequency.setValueAtTime(155,now);
-                kOsc.frequency.exponentialRampToValueAtTime(36,now+0.14);
+                kOsc.frequency.setValueAtTime(146.83,now);
+                kOsc.frequency.exponentialRampToValueAtTime(36.71,now+0.14);
                 kGain.gain.setValueAtTime(0.68*mVol,now);
                 kGain.gain.exponentialRampToValueAtTime(0.001,now+0.15);
-                kOsc.connect(kGain);kGain.connect(masterGainNode);
+                kOsc.connect(kGain);kGain.connect(outNode);
                 kOsc.start(now);kOsc.stop(now+0.15);
             }else if(s16%4===2){
                 const sOsc=audioCtx.createOscillator(),sGain=audioCtx.createGain();
                 sOsc.type='triangle';
-                sOsc.frequency.setValueAtTime(240,now);
-                sOsc.frequency.exponentialRampToValueAtTime(95,now+0.09);
+                sOsc.frequency.setValueAtTime(220.0,now);
+                sOsc.frequency.exponentialRampToValueAtTime(73.42,now+0.09);
                 sGain.gain.setValueAtTime(0.32*mVol,now);
                 sGain.gain.exponentialRampToValueAtTime(0.001,now+0.095);
-                sOsc.connect(sGain);sGain.connect(masterGainNode);
+                sOsc.connect(sGain);sGain.connect(outNode);
                 sOsc.start(now);sOsc.stop(now+0.095);
             }
             const bOsc=audioCtx.createOscillator(),bFilter=audioCtx.createBiquadFilter(),bGain=audioCtx.createGain();
             bOsc.type='sawtooth';bOsc.frequency.setValueAtTime(bassNotes[s16],now);
             bFilter.type='lowpass';bFilter.frequency.setValueAtTime(760,now);
             bGain.gain.setValueAtTime(0.42*mVol,now);bGain.gain.exponentialRampToValueAtTime(0.002,now+0.115);
-            bOsc.connect(bFilter);bFilter.connect(bGain);bGain.connect(masterGainNode);
+            bOsc.connect(bFilter);bFilter.connect(bGain);bGain.connect(outNode);
             bOsc.start(now);bOsc.stop(now+0.115);
 
             const lOsc=audioCtx.createOscillator(),lOsc2=audioCtx.createOscillator(),lGain=audioCtx.createGain();
@@ -755,7 +831,7 @@ function startUnifiedMusicScheduler(){
             lOsc.frequency.setValueAtTime(arpNotes[s16],now);
             lOsc2.frequency.setValueAtTime(arpNotes[s16]*1.004,now);
             lGain.gain.setValueAtTime(0.30*mVol,now);lGain.gain.exponentialRampToValueAtTime(0.002,now+0.14);
-            lOsc.connect(lGain);lOsc2.connect(lGain);lGain.connect(masterGainNode);
+            lOsc.connect(lGain);lOsc2.connect(lGain);lGain.connect(outNode);
             lOsc.start(now);lOsc2.start(now);lOsc.stop(now+0.14);lOsc2.stop(now+0.14);
             synthStep++;
         }catch(e){}
@@ -763,7 +839,7 @@ function startUnifiedMusicScheduler(){
 }
 
 function syncExternalTrackPlayback(){
-    const shouldPlay=gameState.running&&!gameState.paused&&!document.hidden;
+    const shouldPlay=gameState.running&&!gameState.paused&&isAppAudible();
     mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     if(!shouldPlay){mitadruAudio.pause();customAudio.pause();return;}
@@ -816,55 +892,81 @@ function updateVolumeSetting(ch,val){
 }
 
 function playGameSfx(type){
-    if(audioSettings.master<=0.01)return;
+    if(audioSettings.master<=0.01||!isAppAudible())return;
     try{
-        const actx=ensureAudioEngine(),now=actx.currentTime,sVol=audioSettings.sfx,cVol=audioSettings.uiClick;
+        const actx=ensureAudioEngine();
+        if(!actx)return;
+        const now=actx.currentTime,sVol=audioSettings.sfx,cVol=audioSettings.uiClick;
+        const out=sfxBusNode||masterGainNode;
         if(type==='uiClick'){
             if(cVol<=0.01)return;
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sine';o.frequency.setValueAtTime(440,now);o.frequency.exponentialRampToValueAtTime(780,now+0.055);
-            g.gain.setValueAtTime(0.24*cVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.06);
+            o.type='triangle';o.frequency.setValueAtTime(587.33,now);o.frequency.exponentialRampToValueAtTime(880.0,now+0.05);
+            g.gain.setValueAtTime(0.20*cVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.055);
+            o.connect(g);g.connect(out);o.start(now);o.stop(now+0.055);
             return;
         }
         if(sVol<=0.01)return;
         if(type==='steer'){
             const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sine';o.frequency.setValueAtTime(380,now);o.frequency.exponentialRampToValueAtTime(640,now+0.055);
-            g.gain.setValueAtTime(0.22*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.06);
+            o.type='triangle';o.frequency.setValueAtTime(349.23,now);o.frequency.exponentialRampToValueAtTime(587.33,now+0.055);
+            g.gain.setValueAtTime(0.20*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.06);
+            o.connect(g);g.connect(out);o.start(now);o.stop(now+0.06);
+        }else if(type==='nitro'){
+            [293.66,440.0,587.33].forEach((freq,idx)=>{
+                const o=actx.createOscillator(),g=actx.createGain();
+                o.type=idx===0?'sawtooth':'triangle';
+                o.frequency.setValueAtTime(freq*0.5,now);
+                o.frequency.exponentialRampToValueAtTime(freq,now+0.18);
+                g.gain.setValueAtTime(0.16*sVol,now);
+                g.gain.exponentialRampToValueAtTime(0.001,now+0.22);
+                o.connect(g);g.connect(out);o.start(now);o.stop(now+0.22);
+            });
         }else if(type==='siren250'){
             for(let c=0;c<6;c++){
                 const st=now+c*0.5,o=actx.createOscillator(),g=actx.createGain();
-                o.type='sawtooth';o.frequency.setValueAtTime(440,st);o.frequency.linearRampToValueAtTime(880,st+0.25);o.frequency.linearRampToValueAtTime(440,st+0.48);
-                g.gain.setValueAtTime(0.36*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
-                o.connect(g);g.connect(masterGainNode);o.start(st);o.stop(st+0.49);
+                o.type='sawtooth';o.frequency.setValueAtTime(440.0,st);o.frequency.linearRampToValueAtTime(880.0,st+0.25);o.frequency.linearRampToValueAtTime(440.0,st+0.48);
+                g.gain.setValueAtTime(0.30*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.49);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.49);
             }
         }else if(type==='phantom'){
-            [587.33,880.0,1174.66,1760.0].forEach((f,idx)=>{
-                const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.032;
+            [587.33,698.46,880.0,1174.66].forEach((f,idx)=>{
+                const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.03;
                 o.type='triangle';o.frequency.setValueAtTime(f,st);
-                g.gain.setValueAtTime(0.34*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.26);
-                o.connect(g);g.connect(masterGainNode);o.start(st);o.stop(st+0.26);
+                g.gain.setValueAtTime(0.28*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.24);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.24);
             });
         }else if(type==='pickup'){
-            const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sine';o.frequency.setValueAtTime(680,now);o.frequency.setValueAtTime(1020,now+0.045);
-            g.gain.setValueAtTime(0.30*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.16);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.16);
+            [587.33,880.0,1174.66].forEach((f,idx)=>{
+                const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.035;
+                o.type='sine';o.frequency.setValueAtTime(f,st);
+                g.gain.setValueAtTime(0.25*sVol,st);g.gain.exponentialRampToValueAtTime(0.001,st+0.15);
+                o.connect(g);g.connect(out);o.start(st);o.stop(st+0.15);
+            });
         }else if(type==='emp'){
-            const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sawtooth';o.frequency.setValueAtTime(920,now);o.frequency.exponentialRampToValueAtTime(36,now+0.65);
-            g.gain.setValueAtTime(0.48*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.68);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.68);
+            const o1=actx.createOscillator(),o2=actx.createOscillator(),g=actx.createGain();
+            o1.type='sawtooth';o2.type='triangle';
+            o1.frequency.setValueAtTime(880.0,now);o1.frequency.exponentialRampToValueAtTime(73.42,now+0.55);
+            o2.frequency.setValueAtTime(1174.66,now);o2.frequency.exponentialRampToValueAtTime(146.83,now+0.55);
+            g.gain.setValueAtTime(0.32*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.58);
+            o1.connect(g);o2.connect(g);g.connect(out);
+            o1.start(now);o2.start(now);o1.stop(now+0.58);o2.stop(now+0.58);
         }else if(type==='hit'){
-            const o=actx.createOscillator(),g=actx.createGain();
-            o.type='sawtooth';o.frequency.setValueAtTime(145,now);o.frequency.exponentialRampToValueAtTime(28,now+0.32);
-            g.gain.setValueAtTime(0.50*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.34);
-            o.connect(g);g.connect(masterGainNode);o.start(now);o.stop(now+0.34);
+            const o1=actx.createOscillator(),o2=actx.createOscillator(),flt=actx.createBiquadFilter(),g=actx.createGain();
+            o1.type='sawtooth';o2.type='triangle';
+            o1.frequency.setValueAtTime(146.83,now);o1.frequency.exponentialRampToValueAtTime(36.71,now+0.26);
+            o2.frequency.setValueAtTime(220.0,now);o2.frequency.exponentialRampToValueAtTime(55.0,now+0.26);
+            flt.type='lowpass';flt.frequency.setValueAtTime(520,now);
+            g.gain.setValueAtTime(0.38*sVol,now);g.gain.exponentialRampToValueAtTime(0.001,now+0.28);
+            o1.connect(flt);o2.connect(flt);flt.connect(g);g.connect(out);
+            o1.start(now);o2.start(now);o1.stop(now+0.28);o2.stop(now+0.28);
         }
     }catch(e){}
 }
+
+['pointerdown','pointerup','touchstart','touchend','mousedown','mouseup','keydown','keyup','wheel','click'].forEach(evt=>{
+    window.addEventListener(evt,()=>{ensureAudioEngine();},{capture:true,passive:true});
+});
 
 document.addEventListener('pointerdown',(e)=>{
     ensureAudioEngine();
@@ -1373,8 +1475,8 @@ function setMobileControlMode(mode){
     const mapSteer=document.getElementById('mapSteerDesc');
     if(mapTitle&&mapSteer){
         if(mode==='buttons'){mapTitle.innerText="ACTIVE CONTROL MAP // ARROW PADDLES";mapSteer.innerText="Left ◀ / ▶ Right Dock";}
-        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // FINGER DRAG";mapSteer.innerText="1:1 Direct Finger Glide on Road";}
-        else{mapTitle.innerText="ACTIVE CONTROL MAP // PHONE TILT (GYRO)";mapSteer.innerText="Auto-Zeroed Wrist Tilt Steering";}
+        else if(mode==='drag'){mapTitle.innerText="ACTIVE CONTROL MAP // FINGER DRAG";mapSteer.innerText="1:1 Direct Lane-Lock Finger Glide";}
+        else{mapTitle.innerText="ACTIVE CONTROL MAP // PHONE TILT (GYRO)";mapSteer.innerText="Auto-Zeroed Magnetic Lane-Lock Tilt";}
     }
     if(mode==='tilt'){
         calibrateTiltSensor(true);
@@ -1462,51 +1564,60 @@ function resetGraphicsSettingsOnly(){
     applyGraphicsPreset(recommendedPresetKey,true);
 }
 
-function setContinuousOrDiscreteLane(newLaneFloat,instant=false){
-    const clamped=Math.max(-2,Math.min(2,newLaneFloat));
-    const prevInt=Math.round(gameState.egoLaneX);
-    const nextInt=Math.round(clamped);
-    gameState.targetLane=clamped;
-    if(instant){
-        const diff=clamped-gameState.egoLaneX;
-        gameState.egoRoll=Math.max(-0.18,Math.min(0.18,diff*0.22));
-        gameState.egoLaneX=clamped;
-    }
-    if(nextInt!==prevInt){
+function setDiscreteTargetLane(newLaneInt){
+    const clamped=Math.max(-2,Math.min(2,Math.round(newLaneInt)));
+    const prevLane=Math.round(gameState.targetLane);
+    if(clamped!==prevLane){
+        const dir=clamped>prevLane?1:-1;
+        gameState.targetLane=clamped;
         playGameSfx('steer');
-        if(!instant)gameState.egoRoll=(nextInt>prevInt?1:-1)*0.14;
-        checkPhantomFlashNearMiss(prevInt);
+        gameState.egoRoll=dir*0.16;
+        checkPhantomFlashNearMiss(prevLane);
     }
 }
 
-function setDiscreteTargetLane(newLaneInt){
-    setContinuousOrDiscreteLane(Math.round(newLaneInt),false);
+function setMagneticTargetLane(continuousFloat){
+    const clamped=Math.max(-2,Math.min(2,continuousFloat));
+    const curLane=Math.round(gameState.targetLane);
+    const diff=clamped-curLane;
+    if(Math.abs(diff)>=0.42){
+        const step=diff>0?Math.ceil(diff-0.42):Math.floor(diff+0.42);
+        const nextLane=Math.max(-2,Math.min(2,curLane+(step!==0?step:(diff>0?1:-1))));
+        setDiscreteTargetLane(nextLane);
+        return true;
+    }
+    return false;
 }
 
 function getPointerNormalizedX(e){
     const vw=gameState.viewW||window.innerWidth||800;
-    const vh=gameState.viewH||window.innerHeight||450;
     const isRot=isMobileHardware&&(window.innerHeight>window.innerWidth);
     return isRot?(e.clientY/Math.max(1,window.innerHeight)):(e.clientX/Math.max(1,vw));
 }
 
 function handleCanvasPointerDownDrag(e){
     dragActive=true;
-    dragStartNormX=getPointerNormalizedX(e);
-    dragStartLane=gameState.egoLaneX;
-    if(dragStartNormX>0.18&&dragStartNormX<0.82){
-        const directLane=Math.max(-2,Math.min(2,(dragStartNormX-0.5)*5.8));
-        setContinuousOrDiscreteLane(directLane,true);
-        dragStartLane=directLane;
+    const normX=getPointerNormalizedX(e);
+    dragAnchorNormX=normX;
+    smoothedDragNormX=normX;
+    dragAnchorLane=Math.round(gameState.targetLane);
+    if(normX>0.16&&normX<0.84){
+        const tappedLane=Math.max(-2,Math.min(2,Math.round((normX-0.5)*5.4)));
+        setDiscreteTargetLane(tappedLane);
+        dragAnchorLane=tappedLane;
     }
 }
 
 function handleCanvasPointerMoveDrag(e){
     if(!dragActive)return;
-    const curNormX=getPointerNormalizedX(e);
-    const deltaNorm=curNormX-dragStartNormX;
-    const newLane=Math.max(-2,Math.min(2,dragStartLane+deltaNorm*6.4));
-    setContinuousOrDiscreteLane(newLane,true);
+    const rawNormX=getPointerNormalizedX(e);
+    smoothedDragNormX+=(rawNormX-smoothedDragNormX)*0.65;
+    const deltaNorm=smoothedDragNormX-dragAnchorNormX;
+    const desiredFloat=Math.max(-2,Math.min(2,dragAnchorLane+deltaNorm*5.2));
+    if(setMagneticTargetLane(desiredFloat)){
+        dragAnchorNormX=smoothedDragNormX;
+        dragAnchorLane=Math.round(gameState.targetLane);
+    }
 }
 
 function startKeyRebind(actionKey){
@@ -1538,6 +1649,7 @@ function syncCursorVisibility(){
 }
 
 function openPauseSettingsModal(defaultTab='game'){
+    ensureAudioEngine();
     if(gameState.running&&!gameState.paused){
         gameState.paused=true;
         syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
@@ -1564,6 +1676,7 @@ function openPauseSettingsModal(defaultTab='game'){
 }
 
 function resumeFromSettings(){
+    ensureAudioEngine();
     document.getElementById('pauseSettingsModal').style.display='none';
     if(gameState.running){
         requestMobileFullscreenSafe();
@@ -1575,6 +1688,7 @@ function resumeFromSettings(){
 }
 
 function returnToMainMenu(){
+    ensureAudioEngine();
     gameState.running=false;gameState.paused=false;gameState.ep250WarnTimer=0;
     syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
     ['epoch250RedAlertModal','singularityAlertBanner','pauseSettingsModal','gameOverModal','leaderboardModal'].forEach(id=>document.getElementById(id).style.display='none');
@@ -1729,7 +1843,8 @@ function syncBiomeForCurrentEpoch(isInitial=false){
 
 function exitGamePortal(){
     gameState.running=false;
-    syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);syncCursorVisibility();
+    silenceAllAudioForBackground();
+    syncCursorVisibility();
     try{window.open('','_self','');window.close();}catch(e){}
     if(!window.closed){if(window.history.length>1)window.history.back();else window.location.href='index.html';}
 }
@@ -1753,7 +1868,13 @@ function checkPhantomFlashNearMiss(prevLane){
 }
 
 function steerLane(dir){if(gameState.running&&!gameState.paused)setDiscreteTargetLane(Math.round(gameState.targetLane)+dir);}
-function setBoosting(active){gameState.boosting=(active&&gameState.nitroFuel>2);}
+function setBoosting(active){
+    const nextBoost=(active&&gameState.nitroFuel>2);
+    if(nextBoost&&!gameState.boosting&&gameState.running&&!gameState.paused){
+        playGameSfx('nitro');
+    }
+    gameState.boosting=nextBoost;
+}
 function setBraking(active){gameState.braking=active;}
 
 function triggerNeuralEmp(){
@@ -1819,20 +1940,21 @@ function updateGamePhysics(dt,now){
     const baseCruise=(24+endlessSpeedBonus)*diff.speedMul;
     const targetSpeed=gameState.boosting?baseCruise*1.44:(gameState.braking?baseCruise*0.52:baseCruise);
 
-    gameState.speedMps+=(targetSpeed-gameState.speedMps)*Math.min(1,dt*6);
+    gameState.speedMps+=(targetSpeed-gameState.speedMps)*(1-Math.exp(-8*dt));
     gameState.distanceM+=gameState.speedMps*effDt;
     gameState.score+=Math.round(gameState.speedMps*effDt*gameState.combo*diff.scoreMul*1.35);
     updateEngineSoundPitch();
 
-    const isDirectMode=isMobileHardware&&(controlConfig.mobileMode==='drag'||controlConfig.mobileMode==='tilt');
-    if(!isDirectMode||!dragActive){
-        gameState.targetLane=Math.max(-2,Math.min(2,isDirectMode?gameState.targetLane:Math.round(gameState.targetLane)));
-        const laneDiff=gameState.targetLane-gameState.egoLaneX;
-        const snapRate=isDirectMode?28:22;
-        if(Math.abs(laneDiff)<0.004){gameState.egoLaneX=gameState.targetLane;gameState.egoRoll*=0.8;}
-        else{gameState.egoLaneX+=laneDiff*Math.min(1,dt*snapRate);gameState.egoRoll+=(laneDiff*0.14-gameState.egoRoll)*Math.min(1,dt*18);}
+    gameState.targetLane=Math.max(-2,Math.min(2,Math.round(gameState.targetLane)));
+    const laneDiff=gameState.targetLane-gameState.egoLaneX;
+    const smoothAlpha=1-Math.exp(-19*dt);
+    if(Math.abs(laneDiff)<0.003){
+        gameState.egoLaneX=gameState.targetLane;
+        gameState.egoRoll*=Math.exp(-16*dt);
     }else{
-        gameState.egoRoll*=0.85;
+        gameState.egoLaneX+=laneDiff*smoothAlpha;
+        const targetRoll=Math.max(-0.18,Math.min(0.18,laneDiff*0.16));
+        gameState.egoRoll+=(targetRoll-gameState.egoRoll)*(1-Math.exp(-18*dt));
     }
 
     if(gameState.screenShake>0)gameState.screenShake=Math.max(0,gameState.screenShake-dt*28);
@@ -1859,13 +1981,13 @@ function updateGamePhysics(dt,now){
         gameState.pickups.push({lane:LANES[Math.floor(Math.random()*LANES.length)],z:58.0,type:rng<0.3333?'nitro':(rng<0.6667?'emp':'hull'),spin:0});
     }
 
+    const hitThresh=0.56+(diff.hitboxScale-0.75)*0.50;
     for(let i=gameState.hazards.length-1;i>=0;i--){
         const h=gameState.hazards[i];
         h.z-=Math.max(4,gameState.speedMps-h.speedMps)*effDt;
-        if(h.cls.weaves)h.lane=Math.max(-2,Math.min(2,h.baseLane+Math.sin(now*0.0025+h.phase)*0.34));
-        if(h.z<=EGO_Z_FRONT+0.35&&h.z>=EGO_Z_REAR-0.20){
-            const latDist=Math.abs(h.lane-gameState.egoLaneX);
-            const hitThresh=(EGO_HALF_LANE_W+(h.cls.w/LANE_WIDTH_M)*0.36)*diff.hitboxScale;
+        if(h.cls.weaves)h.lane=Math.max(-2,Math.min(2,h.baseLane+Math.sin(now*0.0025+h.phase)*0.32));
+        if(h.z<=EGO_Z_FRONT+0.35&&h.z>=EGO_Z_REAR-0.22){
+            const latDist=Math.min(Math.abs(h.lane-gameState.egoLaneX),Math.abs(h.lane-gameState.targetLane));
             if(latDist<hitThresh){
                 playGameSfx('hit');
                 if(gfxSettings.shake)gameState.screenShake=9;
@@ -1886,7 +2008,7 @@ function updateGamePhysics(dt,now){
     for(let i=gameState.pickups.length-1;i>=0;i--){
         const p=gameState.pickups[i];
         p.z-=gameState.speedMps*effDt;p.spin+=dt*4.5;
-        if(p.z<=EGO_Z_FRONT+0.8&&p.z>=EGO_Z_REAR-0.35&&Math.abs(p.lane-gameState.egoLaneX)<0.65){
+        if(p.z<=EGO_Z_FRONT+0.8&&p.z>=EGO_Z_REAR-0.35&&Math.abs(p.lane-gameState.egoLaneX)<0.68){
             playGameSfx('pickup');
             if(p.type==='nitro'){
                 const g=Math.max(15,Math.round(42*fillMul));
@@ -2193,7 +2315,7 @@ function renderUniqueDimensionHorizon(W,H,horizonY,theme,now,dynamicWorldColor,c
             const topY=horizonY-stemH;
             ctx.fillStyle="#041f11";ctx.strokeStyle="#22c55e";ctx.lineWidth=1.6;
             ctx.beginPath();
-            ctx.moveTo(cellX=cx+ox*W-6,horizonY);
+            ctx.moveTo(cx+ox*W-6,horizonY);
             ctx.quadraticCurveTo(mx-2,horizonY-stemH*0.5,mx-4,topY);
             ctx.lineTo(mx+4,topY);
             ctx.quadraticCurveTo(mx+2,horizonY-stemH*0.5,cx+ox*W+6,horizonY);
@@ -2646,13 +2768,14 @@ function renderSceneFrame(now){
     const roofY=projectY(EGO_Z_CENTER,0.64,H);
 
     const carCenterX=(rearLeftX+rearRightX)*0.5,carHalfW=(rearRightX-rearLeftX)*0.5;
+    const rollShift=gameState.egoRoll*18;
 
     ctx.fillStyle="rgba(0,0,0,0.65)";
     ctx.beginPath();ctx.ellipse(carCenterX,rearY+4,carHalfW*1.06,6,0,0,Math.PI*2);ctx.fill();
 
     ctx.fillStyle="#05070b";
-    ctx.fillRect(rearLeftX-3,rearY-12,6,11);
-    ctx.fillRect(rearRightX-3,rearY-12,6,11);
+    ctx.fillRect(rearLeftX-3,rearY-12-rollShift*0.2,6,11);
+    ctx.fillRect(rearRightX-3,rearY-12+rollShift*0.2,6,11);
 
     const bodyGrad=ctx.createLinearGradient(carCenterX,roofY,carCenterX,rearY);
     bodyGrad.addColorStop(0,activeLiveryProfile.chassisTop||"#1e293b");
@@ -2669,24 +2792,24 @@ function renderSceneFrame(now){
     ctx.strokeStyle=borderGlowCol;
     ctx.lineWidth=2.4;
     ctx.beginPath();
-    ctx.moveTo(rearLeftX,rearY);ctx.lineTo(frontLeftX,frontY);ctx.lineTo(roofLeftX,roofY);
-    ctx.lineTo(roofRightX,roofY);ctx.lineTo(frontRightX,frontY);ctx.lineTo(rearRightX,rearY);
+    ctx.moveTo(rearLeftX,rearY-rollShift*0.25);ctx.lineTo(frontLeftX,frontY-rollShift*0.25);ctx.lineTo(roofLeftX+rollShift*0.35,roofY);
+    ctx.lineTo(roofRightX+rollShift*0.35,roofY);ctx.lineTo(frontRightX,frontY+rollShift*0.25);ctx.lineTo(rearRightX,rearY+rollShift*0.25);
     ctx.closePath();ctx.fill();ctx.stroke();
     ctx.shadowBlur=0;
 
     ctx.strokeStyle=`${borderGlowCol}88`;
     ctx.lineWidth=1.2;
     ctx.beginPath();
-    ctx.moveTo(rearLeftX+carHalfW*0.28,rearY-2);ctx.lineTo(roofLeftX+2,roofY+3);
-    ctx.moveTo(rearRightX-carHalfW*0.28,rearY-2);ctx.lineTo(roofRightX-2,roofY+3);
-    ctx.moveTo((roofLeftX+roofRightX)*0.5,roofY+12);ctx.lineTo(carCenterX,rearY-9);
+    ctx.moveTo(rearLeftX+carHalfW*0.28,rearY-2);ctx.lineTo(roofLeftX+2+rollShift*0.35,roofY+3);
+    ctx.moveTo(rearRightX-carHalfW*0.28,rearY-2);ctx.lineTo(roofRightX-2+rollShift*0.35,roofY+3);
+    ctx.moveTo((roofLeftX+roofRightX)*0.5+rollShift*0.35,roofY+12);ctx.lineTo(carCenterX,rearY-9);
     ctx.stroke();
 
     ctx.fillStyle=activeLiveryProfile.canopyColor;
     ctx.beginPath();
     ctx.moveTo(frontLeftX+(frontRightX-frontLeftX)*0.16,frontY+1);
-    ctx.lineTo(roofLeftX+3,roofY+2);
-    ctx.lineTo(roofRightX-3,roofY+2);
+    ctx.lineTo(roofLeftX+3+rollShift*0.35,roofY+2);
+    ctx.lineTo(roofRightX-3+rollShift*0.35,roofY+2);
     ctx.lineTo(frontRightX-(frontRightX-frontLeftX)*0.16,frontY+1);
     ctx.closePath();ctx.fill();
 
@@ -2743,8 +2866,17 @@ function escapeHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;
 
 window.addEventListener('resize',resizeGameCanvas);
 window.addEventListener('orientationchange',()=>{setTimeout(resizeGameCanvas,60);setTimeout(resizeGameCanvas,220);});
-window.addEventListener('pageshow',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,120);});
-window.addEventListener('focus',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,120);});
+window.addEventListener('pageshow',()=>{resizeGameCanvas();setTimeout(resizeGameCanvas,120);resumeAudioForForeground();});
+window.addEventListener('pagehide',()=>{silenceAllAudioForBackground();});
+window.addEventListener('freeze',()=>{silenceAllAudioForBackground();});
+window.addEventListener('blur',()=>{
+    if(gameState.running&&!gameState.paused)openPauseSettingsModal('game');
+});
+window.addEventListener('focus',()=>{
+    resizeGameCanvas();
+    setTimeout(resizeGameCanvas,120);
+    resumeAudioForForeground();
+});
 window.addEventListener('popstate',()=>{
     if(gameState.running&&!gameState.paused){
         openPauseSettingsModal('game');
@@ -2754,14 +2886,13 @@ window.addEventListener('popstate',()=>{
 
 document.addEventListener('visibilitychange',()=>{
     if(document.hidden){
-        syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
+        if(gameState.running&&!gameState.paused)openPauseSettingsModal('game');
+        silenceAllAudioForBackground();
     }else{
         resizeGameCanvas();
         setTimeout(resizeGameCanvas,120);
         if(controlConfig.mobileMode==='tilt')needsSilentGyroCalib=true;
-        if(gameState.running&&!gameState.paused){
-            syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);
-        }
+        resumeAudioForForeground();
     }
 });
 
@@ -2781,15 +2912,16 @@ window.addEventListener('deviceorientation',(e)=>{
         needsSilentGyroCalib=false;
     }
     const rawDelta=raw-controlConfig.tiltCenterOffset;
-    smoothedGyroDelta+=(rawDelta-smoothedGyroDelta)*0.68;
+    const deadzoneDelta=Math.abs(rawDelta)<1.1?0:(rawDelta>0?rawDelta-1.1:rawDelta+1.1);
+    smoothedGyroDelta+=(deadzoneDelta-smoothedGyroDelta)*0.42;
     if(controlConfig.mobileMode==='tilt'){
         const lbl=document.getElementById('gyroLiveAngleLabel');
         if(lbl)lbl.innerText=`${smoothedGyroDelta>0.2?'+':''}${smoothedGyroDelta.toFixed(1)}°`;
     }
     if(!gameState.running||gameState.paused||controlConfig.mobileMode!=='tilt')return;
-    const maxTiltDeg=18.5-(controlConfig.gyroSensitivity*11.5);
-    const continuousLane=Math.max(-2,Math.min(2,(smoothedGyroDelta/Math.max(4.5,maxTiltDeg))*2.0));
-    setContinuousOrDiscreteLane(continuousLane,false);
+    const maxTiltDeg=18.0-(controlConfig.gyroSensitivity*11.0);
+    const continuousLane=Math.max(-2,Math.min(2,(smoothedGyroDelta/Math.max(4.5,maxTiltDeg))*2.25));
+    setMagneticTargetLane(continuousLane);
 });
 
 canvas.addEventListener('pointerdown',(e)=>{
@@ -2814,7 +2946,7 @@ canvas.addEventListener('pointermove',(e)=>{
 window.addEventListener('pointerup',()=>{
     if(dragActive){
         dragActive=false;
-        gameState.targetLane=Math.round(gameState.egoLaneX);
+        gameState.targetLane=Math.round(gameState.targetLane);
     }
 });
 
@@ -2867,6 +2999,9 @@ updateTopLeaderBanner();
 renderMiniRadar();
 pullGlobalCloudLeaderboard();
 startLiveLeaderboardStream();
+ensureAudioEngine();
+window.addEventListener('DOMContentLoaded',()=>ensureAudioEngine());
+window.addEventListener('load',()=>ensureAudioEngine());
 
 let lastFrameTime=performance.now();
 function mainLoop(now){
