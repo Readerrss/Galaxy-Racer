@@ -1,4 +1,4 @@
-// ==================== CHUNK 1 OF 4 ====================
+// ==================== START OF CHUNK 1 OF 6 ====================
 const canvas=document.getElementById('gameCanvas');
 const ctx=canvas.getContext('2d',{alpha:false});
 const radarCanvas=document.getElementById('miniRadarCanvas');
@@ -181,7 +181,8 @@ function saveSettingsForActiveAccount(){
         localStorage.setItem(SETTINGS_PER_ACC_KEY,JSON.stringify(allSet));
     }catch(e){}
 }
-
+// ==================== END OF CHUNK 1 OF 6 ====================
+// ==================== START OF CHUNK 2 OF 6 ====================
 function loadOrResetSettingsForActiveAccount(){
     isApplyingAccountSettings=true;
     try{
@@ -482,10 +483,10 @@ function toggleAutoBiomeCycle(){
     syncAutoBiomeButtonUI();
     saveSettingsForActiveAccount();
 }
-// ==================== CHUNK 2 OF 4 ====================
+
 const audioSettings={master:0.95,music:0.90,menuMusic:0.85,engine:0.80,sfx:0.92,uiClick:0.85,ostMode:'synth'};
 let audioCtx=null,masterGainNode=null,musicBusNode=null,sfxBusNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0;
-let nextSynthNoteTime=0,nextMenuNoteTime=0,hasTrustedGesture=false;
+let nextSynthNoteTime=0,nextMenuNoteTime=0,hasTrustedGesture=false,isBootSplashDismissed=false;
 const lastSfxTime={};
 
 const MENU_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,293.66,261.63,349.23,440.00,523.25,440.00,349.23,329.63,293.66];
@@ -529,7 +530,6 @@ menuUnlockAudio.preload='auto';
 menuUnlockAudio.playsInline=true;
 menuUnlockAudio.setAttribute('playsinline','');
 menuUnlockAudio.setAttribute('webkit-playsinline','');
-menuUnlockAudio.setAttribute('autoplay','');
 menuUnlockAudio.style.display='none';
 
 function mountMenuAudioToMainPage(){
@@ -540,11 +540,64 @@ function mountMenuAudioToMainPage(){
 }
 mountMenuAudioToMainPage();
 
-function isUserActivationReady(){
-    return Boolean(hasTrustedGesture||(navigator.userActivation&&(navigator.userActivation.isActive||navigator.userActivation.hasBeenActive)));
+function createAndMountBootSplashGate(){
+    if(document.getElementById('bootSplashGateModal'))return;
+    const wrapper=document.getElementById('gameViewportWrapper')||document.body;
+    const gate=document.createElement('div');
+    gate.id='bootSplashGateModal';
+    gate.className='absolute inset-0 bg-[#03050a]/95 z-[95] flex items-center justify-center p-4 select-none';
+    gate.innerHTML=`
+        <div class="hardware-panel modal-anim p-6 sm:p-8 rounded-2xl max-w-md w-full text-center space-y-4 border border-sky-500/40 shadow-[0_0_50px_rgba(14,165,233,0.25)]">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] mono-num font-extrabold uppercase tracking-widest">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> SYSTEM ONLINE // AUDIO READY
+            </div>
+            <h1 class="title-cinzel text-xl sm:text-2xl font-black text-white tracking-wider">ROADSENSE: OVERDRIVE</h1>
+            <p class="text-xs text-gray-300 mono-num leading-relaxed">Neural Interceptor Telemetry &amp; Synth Audio Engine Ready.</p>
+            <button type="button" id="enterMainMenuGateBtn" class="btn-launch w-full py-3.5 px-6 rounded-xl text-sm sm:text-base font-extrabold uppercase tracking-wider cursor-pointer shadow-lg">
+                ▶ START / ENTER MAIN MENU
+            </button>
+            <div class="text-[10px] mono-num text-sky-300/80 uppercase tracking-wider">Tap button or press [ENTER] / [SPACE]</div>
+        </div>
+    `;
+    wrapper.appendChild(gate);
+    const startModalEl=document.getElementById('startModal');
+    if(startModalEl)startModalEl.style.display='none';
+
+    const triggerEnter=(ev)=>{
+        if(ev){
+            ev.stopPropagation();
+            if(ev.type==='keydown'&&ev.key!=='Enter'&&ev.key!==' ')return;
+        }
+        enterMainMenuFromSplash();
+    };
+    gate.addEventListener('pointerdown',triggerEnter);
+    gate.addEventListener('click',triggerEnter);
+    const btn=gate.querySelector('#enterMainMenuGateBtn');
+    if(btn){
+        btn.addEventListener('pointerdown',triggerEnter);
+        btn.addEventListener('click',triggerEnter);
+    }
 }
 
+function enterMainMenuFromSplash(){
+    if(isBootSplashDismissed)return;
+    isBootSplashDismissed=true;
+    hasTrustedGesture=true;
+    const gate=document.getElementById('bootSplashGateModal');
+    if(gate)gate.style.display='none';
+    const startModalEl=document.getElementById('startModal');
+    if(startModalEl)startModalEl.style.display='flex';
+    ensureAudioEngine();
+    tryStartMenuUnlockAudio();
+    playGameSfx('pickup');
+    syncCursorVisibility();
+}
+// ==================== END OF CHUNK 2 OF 6 ====================
+// ==================== START OF CHUNK 3 OF 6 ====================
+let engineSubOsc=null,engineTurboOsc=null,engineTurboGain=null,engineFilterNode=null,engineRumbleLfo=null,engineRumbleGain=null;
+
 function tryStartMenuUnlockAudio(){
+    if(!hasTrustedGesture)return;
     mountMenuAudioToMainPage();
     const isMenuOrPaused=!gameState.running||gameState.paused;
     if(!isAppAudible()||!isMenuOrPaused||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01){
@@ -813,8 +866,7 @@ function ensureAudioEngine(){
         menuUnlockAudio.pause();
         return audioCtx;
     }
-    if(!isUserActivationReady()){
-        tryStartMenuUnlockAudio();
+    if(!hasTrustedGesture){
         return null;
     }
     if(!audioCtx){
@@ -826,31 +878,64 @@ function ensureAudioEngine(){
         masterGainNode.gain.setValueAtTime(audioSettings.master,audioCtx.currentTime);
 
         musicBusNode=audioCtx.createGain();
-        musicBusNode.gain.setValueAtTime(0.80,audioCtx.currentTime);
+        musicBusNode.gain.setValueAtTime(0.76,audioCtx.currentTime);
         sfxBusNode=audioCtx.createGain();
-        sfxBusNode.gain.setValueAtTime(0.55,audioCtx.currentTime);
+        sfxBusNode.gain.setValueAtTime(0.82,audioCtx.currentTime);
 
         musicBusNode.connect(masterGainNode);
         sfxBusNode.connect(masterGainNode);
         masterGainNode.connect(audioCtx.destination);
 
+        // Throaty Roadster / V8 "BRUMMMMM" Engine + Twin-Turbo Nitro Whine
         engineOsc1=audioCtx.createOscillator();
         engineOsc2=audioCtx.createOscillator();
-        const engineFilter=audioCtx.createBiquadFilter();
+        engineSubOsc=audioCtx.createOscillator();
+        engineTurboOsc=audioCtx.createOscillator();
+        engineRumbleLfo=audioCtx.createOscillator();
+
+        engineFilterNode=audioCtx.createBiquadFilter();
         engineGain=audioCtx.createGain();
+        engineTurboGain=audioCtx.createGain();
+        engineRumbleGain=audioCtx.createGain();
+
         engineOsc1.type='sawtooth';
-        engineOsc2.type='triangle';
-        engineOsc1.frequency.setValueAtTime(73.42,audioCtx.currentTime);
-        engineOsc2.frequency.setValueAtTime(146.83,audioCtx.currentTime);
-        engineFilter.type='lowpass';
-        engineFilter.frequency.setValueAtTime(240,audioCtx.currentTime);
+        engineOsc2.type='sawtooth';
+        engineSubOsc.type='square';
+        engineTurboOsc.type='triangle';
+        engineRumbleLfo.type='sine';
+
+        engineOsc1.frequency.setValueAtTime(85,audioCtx.currentTime);
+        engineOsc2.frequency.setValueAtTime(127.5,audioCtx.currentTime);
+        engineSubOsc.frequency.setValueAtTime(42.5,audioCtx.currentTime);
+        engineTurboOsc.frequency.setValueAtTime(420,audioCtx.currentTime);
+        engineRumbleLfo.frequency.setValueAtTime(28,audioCtx.currentTime);
+
+        engineRumbleGain.gain.setValueAtTime(14,audioCtx.currentTime);
+        engineRumbleLfo.connect(engineRumbleGain);
+        engineRumbleGain.connect(engineOsc1.frequency);
+        engineRumbleGain.connect(engineOsc2.frequency);
+
+        engineFilterNode.type='lowpass';
+        engineFilterNode.frequency.setValueAtTime(720,audioCtx.currentTime);
+        engineFilterNode.Q.setValueAtTime(2.8,audioCtx.currentTime);
+
         engineGain.gain.setValueAtTime(0.0001,audioCtx.currentTime);
-        engineOsc1.connect(engineFilter);
-        engineOsc2.connect(engineFilter);
-        engineFilter.connect(engineGain);
+        engineTurboGain.gain.setValueAtTime(0.0001,audioCtx.currentTime);
+
+        engineOsc1.connect(engineFilterNode);
+        engineOsc2.connect(engineFilterNode);
+        engineSubOsc.connect(engineFilterNode);
+        engineFilterNode.connect(engineGain);
+
+        engineTurboOsc.connect(engineTurboGain);
+        engineTurboGain.connect(sfxBusNode);
         engineGain.connect(sfxBusNode);
+
         engineOsc1.start();
         engineOsc2.start();
+        engineSubOsc.start();
+        engineTurboOsc.start();
+        engineRumbleLfo.start();
     }
     if(isAppAudible()&&audioCtx.state!=='running'){
         audioCtx.resume().then(()=>{
@@ -869,7 +954,10 @@ function silenceAllAudioForBackground(){
     mitadruAudio.pause();
     customAudio.pause();
     if(engineGain&&audioCtx){
-        try{engineGain.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.02);}catch(e){}
+        try{
+            engineGain.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.02);
+            if(engineTurboGain)engineTurboGain.gain.setTargetAtTime(0.0001,audioCtx.currentTime,0.02);
+        }catch(e){}
     }
     if(audioCtx&&audioCtx.state==='running'){
         audioCtx.suspend().catch(()=>{});
@@ -879,7 +967,7 @@ function silenceAllAudioForBackground(){
 
 function resumeAudioForForeground(){
     if(!isAppAudible())return;
-    if(isUserActivationReady())ensureAudioEngine();
+    if(hasTrustedGesture)ensureAudioEngine();
     syncExternalTrackPlayback();
     updateEngineSoundPitch();
     updateEqVisuals(gameState.running&&!gameState.paused);
@@ -887,17 +975,44 @@ function resumeAudioForForeground(){
 
 function updateEngineSoundPitch(){
     if(!audioCtx||!engineOsc1||!engineGain)return;
+    if(audioCtx.state==='suspended'&&hasTrustedGesture&&isAppAudible()){
+        audioCtx.resume().catch(()=>{});
+    }
     const now=audioCtx.currentTime;
-    if(!gameState.running||gameState.paused||!isAppAudible()){
-        engineGain.gain.setTargetAtTime(0.0001,now,0.05);
+    if(!gameState.running||gameState.paused||!isAppAudible()||audioSettings.master<=0.01||audioSettings.engine<=0.01){
+        engineGain.gain.setTargetAtTime(0.0001,now,0.04);
+        if(engineTurboGain)engineTurboGain.gain.setTargetAtTime(0.0001,now,0.04);
         return;
     }
-    const speedRatio=Math.max(0.6,Math.min(2.2,gameState.speedMps/28));
-    const baseFreq=36.71*speedRatio+(gameState.boosting?18.35:0);
-    engineOsc1.frequency.setTargetAtTime(baseFreq,now,0.05);
-    engineOsc2.frequency.setTargetAtTime(baseFreq*2.0,now,0.05);
-    const targetVol=0.08*audioSettings.engine*(gameState.boosting?1.2:0.8);
-    engineGain.gain.setTargetAtTime(Math.max(0.0001,targetVol),now,0.06);
+
+    const speedRatio=Math.max(0.75,Math.min(2.4,gameState.speedMps/24));
+    const nitroBoostHz=gameState.boosting?46:(gameState.braking?-18:0);
+    const baseFreq=78*speedRatio+nitroBoostHz;
+
+    // Continuous throaty "BRUMMMMM" frequencies
+    engineOsc1.frequency.setTargetAtTime(baseFreq,now,0.04);
+    engineOsc2.frequency.setTargetAtTime(baseFreq*1.498,now,0.04);
+    if(engineSubOsc)engineSubOsc.frequency.setTargetAtTime(baseFreq*0.5,now,0.04);
+    if(engineRumbleLfo)engineRumbleLfo.frequency.setTargetAtTime(gameState.boosting?44:26*speedRatio,now,0.05);
+
+    // Open filter wide on NITRO so the engine roars & intensifies
+    if(engineFilterNode){
+        const targetCutoff=gameState.boosting?2400:(gameState.braking?480:780*speedRatio);
+        engineFilterNode.frequency.setTargetAtTime(targetCutoff,now,0.05);
+        engineFilterNode.Q.setTargetAtTime(gameState.boosting?4.2:2.6,now,0.05);
+    }
+
+    // Main engine rumble volume (intensifies in NITRO)
+    const targetVol=audioSettings.engine*(gameState.boosting?0.42:(gameState.braking?0.20:0.28));
+    engineGain.gain.setTargetAtTime(Math.max(0.0001,targetVol),now,0.05);
+
+    // Secondary Twin-Turbo / Roadster Afterburner Whine during NITRO
+    if(engineTurboOsc&&engineTurboGain){
+        const turboFreq=gameState.boosting?(560+speedRatio*220):(280+speedRatio*90);
+        const turboVol=gameState.boosting?(0.22*audioSettings.engine):(0.025*audioSettings.engine);
+        engineTurboOsc.frequency.setTargetAtTime(turboFreq,now,0.06);
+        engineTurboGain.gain.setTargetAtTime(Math.max(0.0001,turboVol),now,0.06);
+    }
 }
 
 function startUnifiedMusicScheduler(){
@@ -906,13 +1021,13 @@ function startUnifiedMusicScheduler(){
     const STEP_MENU_SEC=0.135;
     const LOOKAHEAD_SEC=0.24;
     synthLoopTimer=setInterval(()=>{
-        if(!isAppAudible()||audioSettings.master<=0.01){
+        if(!isAppAudible()||audioSettings.master<=0.01||!hasTrustedGesture){
             menuUnlockAudio.pause();
             return;
         }
         const isMenuOrPaused=!gameState.running||gameState.paused;
         if(!audioCtx||audioCtx.state!=='running'){
-            if(isUserActivationReady()&&!audioCtx)ensureAudioEngine();
+            if(!audioCtx)ensureAudioEngine();
             if(isMenuOrPaused)tryStartMenuUnlockAudio();
             else menuUnlockAudio.pause();
             return;
@@ -998,9 +1113,10 @@ function updateVolumeSetting(ch,val){
     updateEngineSoundPitch();
     saveSettingsForActiveAccount();
 }
-
+// ==================== END OF CHUNK 3 OF 6 ====================
+// ==================== START OF CHUNK 4 OF 6 ====================
 function playGameSfx(type){
-    if(audioSettings.master<=0.01||!isAppAudible())return;
+    if(audioSettings.master<=0.01||!isAppAudible()||!hasTrustedGesture)return;
     const nowPerf=performance.now();
     if(lastSfxTime[type]&&nowPerf-lastSfxTime[type]<55)return;
     lastSfxTime[type]=nowPerf;
@@ -1028,16 +1144,33 @@ function playGameSfx(type){
             g.gain.exponentialRampToValueAtTime(0.001,now+0.055);
             o.connect(g);g.connect(out);o.start(now);o.stop(now+0.06);
         }else if(type==='nitro'){
-            [293.66,440.0,587.33].forEach((freq,idx)=>{
-                const o=actx.createOscillator(),g=actx.createGain();
-                o.type='triangle';
-                o.frequency.setValueAtTime(freq*0.5,now);
-                o.frequency.exponentialRampToValueAtTime(freq,now+0.16);
-                g.gain.setValueAtTime(0.001,now);
-                g.gain.linearRampToValueAtTime((idx===0?0.10:0.07)*sVol,now+0.008);
-                g.gain.exponentialRampToValueAtTime(0.001,now+0.20);
-                o.connect(g);g.connect(out);o.start(now);o.stop(now+0.205);
-            });
+            // Stage 1: Deep V8 Afterburner Ignition Roar
+            const roarOsc=actx.createOscillator(),roarSub=actx.createOscillator(),roarFilter=actx.createBiquadFilter(),roarGain=actx.createGain();
+            roarOsc.type='sawtooth';roarSub.type='square';
+            roarOsc.frequency.setValueAtTime(95,now);
+            roarOsc.frequency.exponentialRampToValueAtTime(240,now+0.34);
+            roarSub.frequency.setValueAtTime(48,now);
+            roarSub.frequency.exponentialRampToValueAtTime(120,now+0.34);
+            roarFilter.type='lowpass';
+            roarFilter.frequency.setValueAtTime(450,now);
+            roarFilter.frequency.exponentialRampToValueAtTime(2600,now+0.28);
+            roarFilter.Q.setValueAtTime(3.5,now);
+            roarGain.gain.setValueAtTime(0.001,now);
+            roarGain.gain.linearRampToValueAtTime(0.28*sVol,now+0.015);
+            roarGain.gain.exponentialRampToValueAtTime(0.001,now+0.38);
+            roarOsc.connect(roarFilter);roarSub.connect(roarFilter);roarFilter.connect(roarGain);roarGain.connect(out);
+            roarOsc.start(now);roarSub.start(now);roarOsc.stop(now+0.39);roarSub.stop(now+0.39);
+
+            // Stage 2: Twin-Turbo Spool Whine
+            const spoolOsc=actx.createOscillator(),spoolGain=actx.createGain();
+            spoolOsc.type='triangle';
+            spoolOsc.frequency.setValueAtTime(320,now);
+            spoolOsc.frequency.exponentialRampToValueAtTime(980,now+0.32);
+            spoolGain.gain.setValueAtTime(0.001,now);
+            spoolGain.gain.linearRampToValueAtTime(0.16*sVol,now+0.02);
+            spoolGain.gain.exponentialRampToValueAtTime(0.001,now+0.35);
+            spoolOsc.connect(spoolGain);spoolGain.connect(out);
+            spoolOsc.start(now);spoolOsc.stop(now+0.36);
         }else if(type==='siren250'){
             for(let c=0;c<6;c++){
                 const st=now+c*0.5,o=actx.createOscillator(),g=actx.createGain();
@@ -1090,24 +1223,18 @@ function playGameSfx(type){
     }catch(e){}
 }
 
-function triggerBlankSpaceAutoClick(){
-    setTimeout(()=>{
-        mountMenuAudioToMainPage();
-        tryStartMenuUnlockAudio();
-        if(isUserActivationReady())ensureAudioEngine();
-    },1);
-}
-
 function handleFirstGestureAudioUnlock(e){
-    if(e&&e.isTrusted)hasTrustedGesture=true;
-    if(isUserActivationReady()){
+    if(e&&e.isTrusted){
+        hasTrustedGesture=true;
+        if(!isBootSplashDismissed){
+            enterMainMenuFromSplash();
+            return;
+        }
         if(!audioCtx||audioCtx.state!=='running'){
             ensureAudioEngine();
         }else{
             menuUnlockAudio.pause();
         }
-    }else{
-        tryStartMenuUnlockAudio();
     }
 }
 ['touchstart','touchend','pointerdown','mousedown','keydown','click'].forEach(evt=>{
@@ -1358,7 +1485,7 @@ function adminResetAllLeaderboardScores(){
     refreshAccountStatsUI();
     showDevConsoleFeedback("✓ All Leaderboard Scores (Including Core) Reset!");
 }
-// ==================== CHUNK 3 OF 4 ====================
+
 function syncDevDimensionsButtonLabel(){
     const btn=document.getElementById('devToggleDimsBtn');
     if(!btn)return;
@@ -1561,7 +1688,8 @@ function setVisualFilter(fc,shouldSave=true){
     });
     if(shouldSave)saveSettingsForActiveAccount();
 }
-
+// ==================== END OF CHUNK 4 OF 6 ====================
+// ==================== START OF CHUNK 5 OF 6 ====================
 const controlConfig={
     mobileMode:'buttons',doubleTapNitro:true,tiltCenterOffset:0,invertGyro:false,gyroSensitivity:0.65,lastTouchTime:0,
     binds:{left:['a','arrowleft'],right:['d','arrowright'],nitro:['shift','w','arrowup'],brake:['s','arrowdown'],emp:[' ','e'],hideui:['h']}
@@ -1715,9 +1843,10 @@ function setDiscreteTargetLane(newLaneInt){
     const clamped=Math.max(-2,Math.min(2,Math.round(newLaneInt)));
     const prevLane=Math.round(gameState.targetLane);
     if(clamped!==prevLane){
+        const dir=clamped>prevLane?1:-1;
         gameState.targetLane=clamped;
         playGameSfx('steer');
-        gameState.egoRoll=0;
+        gameState.egoRoll=dir*0.12;
         checkPhantomFlashNearMiss(prevLane);
     }
 }
@@ -1748,6 +1877,7 @@ function getPointerGameCoords(e){
 function handleCanvasTapLane(e){
     const {x,y,W,H}=getPointerGameCoords(e);
     const horizonY=H*0.42;
+    const roadCurve=Math.sin(gameState.distanceM*0.012)*0.65;
     let zTap=EGO_Z_CENTER;
     if(y>horizonY+12){
         const scale=(y-horizonY)/(1.72*0.36);
@@ -1757,7 +1887,7 @@ function handleCanvasTapLane(e){
     let minDist=Infinity;
     for(let i=0;i<LANES.length;i++){
         const l=LANES[i];
-        const lx=projectX(l,zTap,W,H,0);
+        const lx=projectX(l,zTap,W,H,roadCurve);
         const d=Math.abs(x-lx);
         if(d<minDist){
             minDist=d;
@@ -1791,7 +1921,9 @@ function refreshKeybindLabels(){
 }
 
 function syncCursorVisibility(){
-    const anyModal=document.getElementById('startModal').style.display!=='none'||document.getElementById('pauseSettingsModal').style.display!=='none'||document.getElementById('leaderboardModal').style.display!=='none'||document.getElementById('gameOverModal').style.display!=='none';
+    const bootSplash=document.getElementById('bootSplashGateModal');
+    const splashOpen=bootSplash&&bootSplash.style.display!=='none';
+    const anyModal=splashOpen||document.getElementById('startModal').style.display!=='none'||document.getElementById('pauseSettingsModal').style.display!=='none'||document.getElementById('leaderboardModal').style.display!=='none'||document.getElementById('gameOverModal').style.display!=='none';
     document.body.classList.toggle('gameplay-active',gameState.running&&!gameState.paused&&!anyModal);
 }
 
@@ -1839,6 +1971,10 @@ function resumeFromSettings(){
 }
 
 function returnToMainMenu(){
+    hasTrustedGesture=true;
+    isBootSplashDismissed=true;
+    const gate=document.getElementById('bootSplashGateModal');
+    if(gate)gate.style.display='none';
     ensureAudioEngine();
     gameState.running=false;gameState.paused=false;gameState.ep250WarnTimer=0;
     nextSynthNoteTime=0;nextMenuNoteTime=0;
@@ -1873,7 +2009,7 @@ const IDD_HAZARD_CLASSES=[
     {id:7,name:"speed_bump",   wPx:30,hPx:26,w:1.18,speedMul:0.00,color:"#eab308",roof:"#422006",points:90, flat:true}
 ];
 
-const EGO_Z_REAR=1.24,EGO_Z_CENTER=1.45,EGO_Z_FRONT=1.70,EGO_HALF_LANE_W=0.32;
+const EGO_Z_REAR=1.24,EGO_Z_CENTER=1.48,EGO_Z_FRONT=1.78,EGO_HALF_LANE_W=0.33;
 
 function resizeGameCanvas(){
     detectDeviceHardware();
@@ -1934,6 +2070,9 @@ function triggerEpoch250BigRedWarning(){
 
 function startGameSession(startEpochOverride=1){
     hasTrustedGesture=true;
+    isBootSplashDismissed=true;
+    const gate=document.getElementById('bootSplashGateModal');
+    if(gate)gate.style.display='none';
     ensureAudioEngine();
     menuUnlockAudio.pause();
     if(!currentPilot.isCore){
@@ -2106,10 +2245,11 @@ function updateGamePhysics(dt,now){
     const smoothAlpha=1-Math.exp(-18*dt);
     if(Math.abs(laneDiff)<0.003){
         gameState.egoLaneX=gameState.targetLane;
-        gameState.egoRoll=0;
+        gameState.egoRoll*=Math.exp(-16*dt);
     }else{
         gameState.egoLaneX+=laneDiff*smoothAlpha;
-        gameState.egoRoll=0;
+        const targetRoll=Math.max(-0.14,Math.min(0.14,laneDiff*0.12));
+        gameState.egoRoll+=(targetRoll-gameState.egoRoll)*(1-Math.exp(-16*dt));
     }
 
     if(gameState.screenShake>0)gameState.screenShake=Math.max(0,gameState.screenShake-dt*28);
@@ -2282,7 +2422,17 @@ function renderMiniRadar(){
         }
     }
 }
-// ==================== CHUNK 4 OF 4 ====================
+// ==================== END OF CHUNK 5 OF 6 ====================
+// ==================== START OF CHUNK 6 OF 6 ====================
+// Override projectX so the camera tracks smoothly behind the car (0.82), keeping the active lane straight in all 5 lanes
+function projectX(laneOffset,zSafe,W,H,roadCurve=0){
+    const scale=(H*0.85)/zSafe;
+    const zNorm=zSafe*0.0181818;
+    const curveShift=roadCurve*(zNorm*zNorm)*(W*0.22);
+    const worldX=(laneOffset-gameState.egoLaneX*0.82)*LANE_WIDTH_M;
+    return W*0.5+worldX*scale*0.24+curveShift;
+}
+
 function ensureCachedBiomeGradients(W,H,horizonY,theme){
     const key=`${W}_${H}_${biomeIdx}`;
     if(cachedGradients.key===key)return;
@@ -2625,7 +2775,7 @@ function renderHighTextureDistinctHazard(hz,zSafe,W,H,roadCurve,dynamicWorldColo
     const by=Math.round(projectY(zSafe,0,H));
     const s=Math.max(0.76,Math.min(1.08,Math.min(W,H)/450));
     const boxW=Math.round(30*s);
-    const boxH=Math.round(26*s);
+    const boxH=Math.round(28*s);
     const x1=Math.round(bx-boxW*0.5),y2=by,y1=y2-boxH;
     const primaryCol=isCosmic250?`hsl(${(cosmicHue+hz.cls.id*45)%360},90%,58%)`:hz.cls.color;
     const tierColor=(hz.rFinal>=0.85)?"#ef4444":(hz.rFinal>=0.65?"#f97316":(hz.rFinal>=0.35?"#f59e0b":dynamicWorldColor));
@@ -2672,21 +2822,23 @@ function renderHighTextureDistinctHazard(hz,zSafe,W,H,roadCurve,dynamicWorldColo
         ctx.fillRect(x1,y2-6*s,4.5*s,6*s);ctx.fillRect(x1+boxW-4.5*s,y2-6*s,4.5*s,6*s);
         ctx.fillStyle=hz.cls.roof;ctx.strokeStyle=primaryCol;ctx.lineWidth=1.7;
         ctx.beginPath();
-        ctx.moveTo(x1,y2-2*s);ctx.lineTo(x1+2*s,y1+boxH*0.42);ctx.lineTo(x1+6*s,y1+2*s);
-        ctx.lineTo(x1+boxW-6*s,y1+2*s);ctx.lineTo(x1+boxW-2*s,y1+boxH*0.42);ctx.lineTo(x1+boxW,y2-2*s);
+        ctx.moveTo(bx,y1);
+        ctx.quadraticCurveTo(x1+4*s,y1+2*s,x1+2*s,y1+boxH*0.36);
+        ctx.lineTo(x1,y2-2*s);
+        ctx.lineTo(x1+boxW,y2-2*s);
+        ctx.lineTo(x1+boxW-2*s,y1+boxH*0.36);
+        ctx.quadraticCurveTo(x1+boxW-4*s,y1+2*s,bx,y1);
         ctx.closePath();ctx.fill();ctx.stroke();
         ctx.fillStyle="#7dd3fc";
         ctx.beginPath();
-        ctx.moveTo(x1+6.5*s,y1+4*s);ctx.lineTo(x1+boxW-6.5*s,y1+4*s);
-        ctx.lineTo(x1+boxW-4*s,y1+boxH*0.40);ctx.lineTo(x1+4*s,y1+boxH*0.40);
+        ctx.moveTo(bx,y1+5*s);
+        ctx.lineTo(x1+5*s,y1+boxH*0.44);
+        ctx.lineTo(x1+boxW-5*s,y1+boxH*0.44);
         ctx.closePath();ctx.fill();
-        ctx.fillStyle=primaryCol;
-        ctx.fillRect(x1+2.5*s,y1+boxH*0.44,boxW-5*s,boxH*0.42);
         ctx.fillStyle="#06080f";
         ctx.fillRect(x1+3*s,y2-8*s,boxW-6*s,5*s);
         ctx.fillStyle="#ff1e42";
-        ctx.fillRect(x1+3.5*s,y2-7.5*s,7*s,3.5*s);ctx.fillRect(x1+boxW-10.5*s,y2-7.5*s,7*s,3.5*s);
-        ctx.fillStyle="#38bdf8";ctx.fillRect(bx-3*s,y2-7*s,6*s,2*s);
+        ctx.fillRect(x1+3.5*s,y2-7.5*s,7*s,3*s);ctx.fillRect(x1+boxW-10.5*s,y2-7.5*s,7*s,3*s);
     }else if(cid===3){
         ctx.fillStyle="#05070b";
         ctx.fillRect(bx-3*s,y2-9*s,6*s,9*s);
@@ -2810,7 +2962,7 @@ function renderSceneFrame(now){
     ctx.fillStyle=theme.roadDark;
     ctx.fillRect(0,horizonY,W,H-horizonY);
 
-    const roadCurve=0;
+    const roadCurve=Math.sin(gameState.distanceM*0.012)*0.65;
     const totalSlices=gfxSettings.roadSlices||(isMobileHardware?26:36);
     const sliceStep=55.0/totalSlices;
 
@@ -2914,78 +3066,225 @@ function renderSceneFrame(now){
         renderHighTextureDistinctHazard(hz,Math.max(0.55,hz.z),W,H,roadCurve,dynamicWorldColor,isCosmic250,cosmicHue);
     }
 
-    const carCenterX=Math.round(projectX(gameState.egoLaneX,EGO_Z_CENTER,W,H,roadCurve));
-    const rearY=Math.round(projectY(EGO_Z_CENTER,0,H));
-    const egoScale=(H*0.85)/EGO_Z_CENTER;
-    const carHalfW=Math.round(EGO_HALF_LANE_W*LANE_WIDTH_M*egoScale*0.24);
-    const frontY=Math.round(projectY(EGO_Z_CENTER,0.48,H));
-    const roofY=Math.round(projectY(EGO_Z_CENTER,0.72,H));
-    const rearLeftX=carCenterX-carHalfW;
-    const rearRightX=carCenterX+carHalfW;
-    const frontHalfW=Math.round(carHalfW*0.76);
-    const roofHalfW=Math.round(carHalfW*0.54);
-    const frontLeftX=carCenterX-frontHalfW;
-    const frontRightX=carCenterX+frontHalfW;
-    const roofLeftX=carCenterX-roofHalfW;
-    const roofRightX=carCenterX+roofHalfW;
+    // ==================== 3D REAR-CHASE TESLA ROADSTER 2.0 ====================
+    // 🔧 TWEAK SIZE HERE: CAR_LENGTH_SCALE (1.0 = normal, 1.15 = longer) | CAR_WIDTH_SCALE (0.86 fits cleanly inside lane)
+    const CAR_LENGTH_SCALE=1.05;
+    const CAR_WIDTH_SCALE=0.86;
 
-    ctx.fillStyle="rgba(0,0,0,0.65)";
-    ctx.beginPath();ctx.ellipse(carCenterX,rearY+4,carHalfW*1.06,6,0,0,Math.PI*2);ctx.fill();
+    const zCarRear=1.34;
+    const zCarFront=1.54;
+    const rearX=projectX(gameState.egoLaneX,zCarRear,W,H,roadCurve);
+    const frontX=projectX(gameState.egoLaneX,zCarFront,W,H,roadCurve);
+    const carCenterX=Math.round(rearX);
+    const hoodLeadX=Math.round((frontX-rearX)*0.65);
 
-    ctx.fillStyle="#05070b";
-    ctx.fillRect(rearLeftX-3,rearY-12,6,11);
-    ctx.fillRect(rearRightX-3,rearY-12,6,11);
+    const rearY=Math.round(projectY(zCarRear,0,H));
+    const halfW=Math.round(((H*0.85)/zCarRear)*EGO_HALF_LANE_W*LANE_WIDTH_M*0.24*CAR_WIDTH_SCALE);
+    const carH=Math.round(halfW*0.92*CAR_LENGTH_SCALE);
 
-    const bodyGrad=ctx.createLinearGradient(carCenterX,roofY,carCenterX,rearY);
-    bodyGrad.addColorStop(0,activeLiveryProfile.chassisTop||"#1e293b");
-    bodyGrad.addColorStop(0.55,"#151c2c");
-    bodyGrad.addColorStop(1,activeLiveryProfile.chassisBot||"#0b0f19");
+    const diffuserBotY=rearY;
+    const fasciaTopY=rearY-Math.round(carH*0.34);
+    const shoulderY=rearY-Math.round(carH*0.56);
+    const roofTopY=rearY-carH;
+
+    const shoulderHalfW=Math.round(halfW*0.96);
+    const roofHalfW=Math.round(halfW*0.56);
+    const hoodHalfW=Math.round(halfW*0.44);
+
+    // 1. Tight contact shadow under rear bumper & tires (NO giant round chapati shadow!)
+    ctx.fillStyle="rgba(0,0,0,0.75)";
+    ctx.beginPath();
+    ctx.ellipse(carCenterX,diffuserBotY+3,halfW*0.98,6,0,0,Math.PI*2);
+    ctx.fill();
+
+    // 2. Wide Michelin-style performance rear tires with tread & rim glow
+    const tireW=Math.max(9,Math.round(halfW*0.26));
+    const tireH=Math.max(13,Math.round(carH*0.36));
+    ctx.fillStyle="#04060a";
+    ctx.strokeStyle="#1e293b";
+    ctx.lineWidth=1.2;
+    ctx.beginPath();
+    ctx.roundRect(carCenterX-halfW-2,diffuserBotY-tireH+3,tireW,tireH,3);
+    ctx.roundRect(carCenterX+halfW-tireW+2,diffuserBotY-tireH+3,tireW,tireH,3);
+    ctx.fill();
+    ctx.stroke();
 
     const borderGlowCol=gameState.boosting?"#fbbf24":activeRailColor;
     if(gfxSettings.bloom){
-        ctx.shadowBlur=isMobileHardware?12:16;
+        ctx.shadowBlur=isMobileHardware?12:18;
         ctx.shadowColor=borderGlowCol;
     }
 
+    // 3. Sculpted Tesla Roadster Widebody Rear Haunches & Fastback Outer Shell
+    const bodyGrad=ctx.createLinearGradient(carCenterX,roofTopY,carCenterX,diffuserBotY);
+    bodyGrad.addColorStop(0,activeLiveryProfile.chassisTop||"#1e293b");
+    bodyGrad.addColorStop(0.48,activeLiveryProfile.dotColor+"44");
+    bodyGrad.addColorStop(1,activeLiveryProfile.chassisBot||"#090d16");
+
     ctx.fillStyle=bodyGrad;
     ctx.strokeStyle=borderGlowCol;
-    ctx.lineWidth=2.4;
+    ctx.lineWidth=2.2;
     ctx.beginPath();
-    ctx.moveTo(rearLeftX,rearY);ctx.lineTo(frontLeftX,frontY);ctx.lineTo(roofLeftX,roofY);
-    ctx.lineTo(roofRightX,roofY);ctx.lineTo(frontRightX,frontY);ctx.lineTo(rearRightX,rearY);
-    ctx.closePath();ctx.fill();ctx.stroke();
+    // Bottom-left rear fender around wheel arch
+    ctx.moveTo(carCenterX-halfW+2,diffuserBotY-3);
+    ctx.quadraticCurveTo(carCenterX-halfW-4,fasciaTopY+4,carCenterX-shoulderHalfW,shoulderY);
+    // Taper inward up the fastback C-pillar to the roof/hood
+    ctx.quadraticCurveTo(carCenterX+hoodLeadX*0.5-roofHalfW*1.12,roofTopY+Math.round(carH*0.18),carCenterX+hoodLeadX-hoodHalfW,roofTopY+3);
+    // Curved front windshield header / hood crest
+    ctx.quadraticCurveTo(carCenterX+hoodLeadX,roofTopY-3,carCenterX+hoodLeadX+hoodHalfW,roofTopY+3);
+    // Right fastback C-pillar down to wide right haunch
+    ctx.quadraticCurveTo(carCenterX+hoodLeadX*0.5+roofHalfW*1.12,roofTopY+Math.round(carH*0.18),carCenterX+shoulderHalfW,shoulderY);
+    ctx.quadraticCurveTo(carCenterX+halfW+4,fasciaTopY+4,carCenterX+halfW-2,diffuserBotY-3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
     ctx.shadowBlur=0;
 
+    // 4. Aerodynamic side mirrors
+    ctx.fillStyle=activeLiveryProfile.chassisTop||"#1e293b";
+    ctx.strokeStyle=borderGlowCol;
+    ctx.lineWidth=1.2;
+    const mirrorY=shoulderY-Math.round(carH*0.16);
+    const mirrorCenterX=carCenterX+Math.round(hoodLeadX*0.45);
+    ctx.beginPath();
+    ctx.moveTo(mirrorCenterX-roofHalfW*1.10,mirrorY);
+    ctx.lineTo(mirrorCenterX-roofHalfW*1.28,mirrorY-2);
+    ctx.lineTo(mirrorCenterX-roofHalfW*1.18,mirrorY+3);
+    ctx.closePath();
+    ctx.moveTo(mirrorCenterX+roofHalfW*1.10,mirrorY);
+    ctx.lineTo(mirrorCenterX+roofHalfW*1.28,mirrorY-2);
+    ctx.lineTo(mirrorCenterX+roofHalfW*1.18,mirrorY+3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // 5. Panoramic Smoked-Glass Fastback Roof & Rear Engine Bay Window
+    const glassGrad=ctx.createLinearGradient(carCenterX,roofTopY+2,carCenterX,shoulderY+4);
+    glassGrad.addColorStop(0,activeLiveryProfile.canopyColor||"#7dd3fc");
+    glassGrad.addColorStop(0.55,"#0f172a");
+    glassGrad.addColorStop(1,"#060911");
+
+    ctx.fillStyle=glassGrad;
+    ctx.strokeStyle=`${borderGlowCol}99`;
+    ctx.lineWidth=1.3;
+    ctx.beginPath();
+    ctx.moveTo(carCenterX+hoodLeadX-hoodHalfW*0.82,roofTopY+4);
+    ctx.quadraticCurveTo(carCenterX+hoodLeadX,roofTopY+1,carCenterX+hoodLeadX+hoodHalfW*0.82,roofTopY+4);
+    ctx.lineTo(carCenterX+roofHalfW*0.76,shoulderY+2);
+    ctx.quadraticCurveTo(carCenterX,shoulderY+5,carCenterX-roofHalfW*0.76,shoulderY+2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Flying-buttress B-pillar split line & rear glass defroster reflection
+    ctx.strokeStyle="rgba(255,255,255,0.28)";
+    ctx.lineWidth=1.1;
+    ctx.beginPath();
+    ctx.moveTo(carCenterX+hoodLeadX*0.55-roofHalfW*0.68,roofTopY+Math.round(carH*0.18));
+    ctx.quadraticCurveTo(carCenterX+hoodLeadX*0.55,roofTopY+Math.round(carH*0.15),carCenterX+hoodLeadX*0.55+roofHalfW*0.68,roofTopY+Math.round(carH*0.18));
+    ctx.stroke();
+
+    // 6. Sculpted Fender Shoulder Creases (Tesla Roadster Haunch Lines)
+    ctx.strokeStyle=`${borderGlowCol}bb`;
+    ctx.lineWidth=1.3;
+    ctx.beginPath();
+    ctx.moveTo(carCenterX-shoulderHalfW+2,shoulderY);
+    ctx.quadraticCurveTo(carCenterX-halfW*0.68,fasciaTopY-4,carCenterX-halfW*0.42,fasciaTopY);
+    ctx.moveTo(carCenterX+shoulderHalfW-2,shoulderY);
+    ctx.quadraticCurveTo(carCenterX+halfW*0.68,fasciaTopY-4,carCenterX+halfW*0.42,fasciaTopY);
+    ctx.stroke();
+
+    // 7. Active Deployable Rear Aero Wing (rises during Nitro or Braking)
+    const wingLift=(gameState.boosting||gameState.braking)?4:0;
+    const wingY=fasciaTopY-2-wingLift;
+    const wingW=Math.round(shoulderHalfW*0.92);
+    ctx.fillStyle="#070b14";
+    ctx.strokeStyle=borderGlowCol;
+    ctx.lineWidth=1.5;
+    ctx.beginPath();
+    ctx.moveTo(carCenterX-wingW,wingY+2);
+    ctx.quadraticCurveTo(carCenterX,wingY-2,carCenterX+wingW,wingY+2);
+    ctx.lineTo(carCenterX+wingW-3,wingY+5);
+    ctx.quadraticCurveTo(carCenterX,wingY+2,carCenterX-wingW+3,wingY+5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // 8. Recessed Carbon-Fiber Rear Fascia & Continuous LED Taillight Blade
+    const fasciaW=Math.round(halfW*0.90);
+    const fasciaH=Math.max(10,diffuserBotY-fasciaTopY-3);
+    ctx.fillStyle="#05070e";
+    ctx.strokeStyle="#1e293b";
+    ctx.lineWidth=1.2;
+    ctx.beginPath();
+    ctx.roundRect(carCenterX-fasciaW,fasciaTopY,fasciaW*2,fasciaH,4);
+    ctx.fill();
+    ctx.stroke();
+
+    // Signature Roadster Wrap-Around LED Taillight Strip
+    const tailCol=gameState.braking?"#ff1e42":(gameState.boosting?"#fbbf24":(activeLiveryProfile.isVoidChroma?activeRailColor:"#f43f5e"));
+    if(gfxSettings.bloom){
+        ctx.shadowBlur=gameState.braking?18:10;
+        ctx.shadowColor=tailCol;
+    }
+    ctx.fillStyle=tailCol;
+    const bladeW=Math.round(fasciaW*0.42);
+    const bladeY=fasciaTopY+2;
+    ctx.beginPath();
+    ctx.roundRect(carCenterX-fasciaW+3,bladeY,bladeW,3.5,2);
+    ctx.roundRect(carCenterX+fasciaW-bladeW-3,bladeY,bladeW,3.5,2);
+    // Center Tesla-style illuminated cyber badge
+    ctx.roundRect(carCenterX-4,bladeY+0.5,8,2.5,1);
+    ctx.fill();
+    ctx.shadowBlur=0;
+
+    // 9. Aggressive Carbon Diffuser Strakes + SpaceX Cold-Gas Thruster Nozzle
+    const diffY=diffuserBotY-8;
     ctx.strokeStyle=`${borderGlowCol}88`;
     ctx.lineWidth=1.2;
     ctx.beginPath();
-    ctx.moveTo(rearLeftX+carHalfW*0.28,rearY-2);ctx.lineTo(roofLeftX+2,roofY+3);
-    ctx.moveTo(rearRightX-carHalfW*0.28,rearY-2);ctx.lineTo(roofRightX-2,roofY+3);
-    ctx.moveTo(carCenterX,roofY+12);ctx.lineTo(carCenterX,rearY-9);
+    [-0.55,-0.25,0.25,0.55].forEach(r=>{
+        const sx=carCenterX+Math.round(fasciaW*r);
+        ctx.moveTo(sx,diffY);
+        ctx.lineTo(sx,diffuserBotY-2);
+    });
     ctx.stroke();
 
-    ctx.fillStyle=activeLiveryProfile.canopyColor;
+    // Central SpaceX Thruster Port & Dual Exhausts
+    const exhaustCol=gameState.boosting?"#38bdf8":activeLiveryProfile.thrusterColor;
+    ctx.fillStyle="#090d16";
+    ctx.strokeStyle=exhaustCol;
+    ctx.lineWidth=1.4;
     ctx.beginPath();
-    ctx.moveTo(frontLeftX+(frontRightX-frontLeftX)*0.16,frontY+1);
-    ctx.lineTo(roofLeftX+3,roofY+2);
-    ctx.lineTo(roofRightX-3,roofY+2);
-    ctx.lineTo(frontRightX-(frontRightX-frontLeftX)*0.16,frontY+1);
-    ctx.closePath();ctx.fill();
+    ctx.roundRect(carCenterX-8,diffY+1,16,5,2);
+    ctx.fill();
+    ctx.stroke();
 
-    ctx.fillStyle="#06080f";
-    ctx.fillRect(rearLeftX+3,rearY-10,(rearRightX-rearLeftX)-6,8);
-
-    const thrusterCol=gameState.braking?"#ef4444":(gameState.boosting?"#fbbf24":(activeLiveryProfile.isVoidChroma?activeRailColor:activeLiveryProfile.thrusterColor));
-    ctx.fillStyle=thrusterCol;
-    const tWidth=Math.max(10,carHalfW*0.38);
-    ctx.fillRect(rearLeftX+5,rearY-9,tWidth,6);
-    ctx.fillRect(rearRightX-tWidth-5,rearY-9,tWidth,6);
-    ctx.fillRect(carCenterX-6,rearY-8,12,4);
-
+    // 10. NITRO Twin Afterburner Plasma Cones + SpaceX Shock-Diamond Jet
     if(gameState.boosting){
-        ctx.fillStyle="#fde68a";
-        ctx.fillRect(rearLeftX+8,rearY-3,tWidth*0.6,8+Math.random()*6);
-        ctx.fillRect(rearRightX-tWidth*0.6-8,rearY-3,tWidth*0.6,8+Math.random()*6);
+        const flameLen=14+Math.random()*12;
+        if(gfxSettings.bloom){
+            ctx.shadowBlur=16;
+            ctx.shadowColor="#fbbf24";
+        }
+        ctx.fillStyle="rgba(251,191,36,0.92)";
+        ctx.beginPath();
+        ctx.moveTo(carCenterX-fasciaW*0.52,diffuserBotY-2);
+        ctx.lineTo(carCenterX-fasciaW*0.36,diffuserBotY+flameLen);
+        ctx.lineTo(carCenterX-fasciaW*0.20,diffuserBotY-2);
+        ctx.moveTo(carCenterX+fasciaW*0.20,diffuserBotY-2);
+        ctx.lineTo(carCenterX+fasciaW*0.36,diffuserBotY+flameLen);
+        ctx.lineTo(carCenterX+fasciaW*0.52,diffuserBotY-2);
+        ctx.fill();
+
+        // Central SpaceX blue/white plasma jet
+        ctx.fillStyle="#e0f2fe";
+        ctx.beginPath();
+        ctx.moveTo(carCenterX-6,diffuserBotY-2);
+        ctx.lineTo(carCenterX,diffuserBotY+flameLen*1.25);
+        ctx.lineTo(carCenterX+6,diffuserBotY-2);
+        ctx.fill();
+        ctx.shadowBlur=0;
     }
 
     if(gameState.empWaveRadius>0){
@@ -3108,6 +3407,11 @@ canvas.addEventListener('pointerdown',(e)=>{
 
 window.addEventListener('keydown',(e)=>{
     if(e.isTrusted)hasTrustedGesture=true;
+    if(!isBootSplashDismissed&&(e.key==='Enter'||e.key===' ')){
+        e.preventDefault();
+        enterMainMenuFromSplash();
+        return;
+    }
     ensureAudioEngine();
     const k=e.key.toLowerCase();
     if(awaitingRebindAction){
@@ -3151,15 +3455,13 @@ buildKeybindGridUI();
 buildGraphicsUI();
 const savedPilotId=localStorage.getItem('roadSense_overdrive_pilotId')||"GUEST";
 applyPilotProfile(savedPilotId);
+createAndMountBootSplashGate();
 resizeGameCanvas();
 updateTopLeaderBanner();
 renderMiniRadar();
 pullGlobalCloudLeaderboard();
 startLiveLeaderboardStream();
 startUnifiedMusicScheduler();
-triggerBlankSpaceAutoClick();
-window.addEventListener('DOMContentLoaded',triggerBlankSpaceAutoClick);
-window.addEventListener('load',triggerBlankSpaceAutoClick);
 
 let lastFrameTime=performance.now();
 function mainLoop(now){
@@ -3170,3 +3472,4 @@ function mainLoop(now){
     requestAnimationFrame(mainLoop);
 }
 requestAnimationFrame(mainLoop);
+// ==================== END OF CHUNK 6 OF 6 ====================
