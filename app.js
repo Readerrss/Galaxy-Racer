@@ -4,26 +4,7 @@ const radarCanvas=document.getElementById('miniRadarCanvas');
 const rCtx=radarCanvas.getContext('2d');
 const LANES=[-2,-1,0,1,2];
 const LANE_WIDTH_M=3.5;
-let isMobileHardware=false,isHudHidden=false,recommendedPresetKey='low',detectedGpuLabel='Standard GPU';
-
-function scanDeviceGpuInfo(){
-    try{
-        const testCanvas=document.createElement('canvas');
-        const gl=testCanvas.getContext('webgl')||testCanvas.getContext('experimental-webgl');
-        if(!gl)return {label:'Canvas2D',tier:1};
-        const dbg=gl.getExtension('WEBGL_debug_renderer_info');
-        const raw=dbg?String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)||''):String(gl.getParameter(gl.RENDERER)||'');
-        const clean=raw.replace(/ANGLE \((.+?),?\)/i,'$1').split(',')[0].trim().slice(0,24)||'Integrated GPU';
-        detectedGpuLabel=clean;
-        const lowRaw=raw.toLowerCase();
-        if(/rtx|radeon rx [6789]\d\d\d|apple m[234]|gtx 1080|gtx 1660/i.test(lowRaw))return {label:clean,tier:4};
-        if(/gtx|radeon rx|arc a\d|apple m1|iris xe|adreno \(tm\) 7[45]\d|adreno \(tm\) 8\d\d|apple a1[78]/i.test(lowRaw))return {label:clean,tier:3};
-        if(/adreno \(tm\) 6[56789]\d|adreno \(tm\) 7[123]\d|mali-g7[789]|mali-g[89]\d|immortalis|apple a1[56]|uhd graphics|iris/i.test(lowRaw))return {label:clean,tier:2};
-        return {label:clean,tier:1};
-    }catch(e){
-        return {label:'Standard GPU',tier:1};
-    }
-}
+let isMobileHardware=false,isHudHidden=false;
 
 function detectDeviceHardware(){
     const uaMobile=/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -31,19 +12,8 @@ function detectDeviceHardware(){
     isMobileHardware=Boolean(uaMobile||coarsePointer);
     document.body.classList.toggle('is-mobile',isMobileHardware);
     document.body.classList.toggle('is-pc',!isMobileHardware);
-    const cores=navigator.hardwareConcurrency||4,mem=navigator.deviceMemory||4;
-    const gpuInfo=scanDeviceGpuInfo();
-    if(isMobileHardware){
-        if(gpuInfo.tier>=3&&mem>=8&&cores>=8)recommendedPresetKey='medium';
-        else recommendedPresetKey='low';
-    }else{
-        if(gpuInfo.tier>=4||(cores>=12&&mem>=16))recommendedPresetKey='ultra';
-        else if(gpuInfo.tier>=3||(cores>=8&&mem>=8))recommendedPresetKey='high';
-        else if(gpuInfo.tier>=2||(cores>=4&&mem>=4))recommendedPresetKey='medium';
-        else recommendedPresetKey='low';
-    }
     const scanLbl=document.getElementById('gfxHardwareScanLabel');
-    if(scanLbl)scanLbl.innerText=`🔍 Scan: ${gpuInfo.label} (${cores}C/${mem}GB) • ${recommendedPresetKey.toUpperCase()} (Recommended)`;
+    if(scanLbl)scanLbl.innerText="🖥️ Quality Presets & Render Options";
     const ctrlHeader=document.getElementById('ctrlPlatformHeaderLabel');
     if(ctrlHeader)ctrlHeader.innerText=isMobileHardware?"📱 Mobile / Android Touch & Gyro Controls":"⌨️ PC Keyboard Controls & Keybinds";
     const tapLaneBtn=document.getElementById('mobCtrl_drag');
@@ -104,7 +74,7 @@ const PILOT_PROFILES={
 const CORE_IDS=new Set(["1117","1183","1134","1075","1174"]);
 const ACCOUNTS_DB_KEY='roadSense_overdrive_accounts_db_v8';
 const DELETED_ACCOUNTS_KEY='roadSense_overdrive_deleted_accs_v8';
-const SETTINGS_PER_ACC_KEY='roadSense_overdrive_acc_settings_v11';
+const SETTINGS_PER_ACC_KEY='roadSense_overdrive_acc_settings_v12';
 
 let currentPilot=PILOT_PROFILES["GUEST"];
 let activeLiveryProfile=PILOT_PROFILES["GUEST"];
@@ -247,7 +217,7 @@ function loadOrResetSettingsForActiveAccount(){
                 refreshKeybindLabels();
             }
             if(saved.gfx){
-                applyGraphicsPreset(saved.gfx.preset||recommendedPresetKey,false);
+                applyGraphicsPreset(saved.gfx.preset||'medium',false);
                 if(saved.gfx.resScale)updateGfxResolution(Math.round(saved.gfx.resScale*100),false);
                 if(saved.gfx.roadSlices)updateGfxDrawSlices(saved.gfx.roadSlices,false);
                 if(saved.gfx.particles!==undefined)updateGfxParticles(Math.round(saved.gfx.particles*100),false);
@@ -517,6 +487,64 @@ let audioCtx=null,masterGainNode=null,musicBusNode=null,sfxBusNode=null,engineOs
 let nextSynthNoteTime=0,nextMenuNoteTime=0;
 const lastSfxTime={};
 
+const MENU_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,293.66,261.63,349.23,440.00,523.25,440.00,349.23,329.63,293.66];
+const MENU_BASS_NOTES=[73.42,73.42,87.31,87.31,65.41,65.41,110.00,98.00];
+const GAME_BASS_NOTES=[73.42,73.42,146.83,73.42,87.31,87.31,98.00,110.00,73.42,73.42,146.83,73.42,116.54,116.54,110.00,98.00];
+const GAME_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,440.00,293.66,349.23,466.16,587.33,659.25,587.33,440.00,349.23];
+
+function buildMenuAutoplayWavUrl(){
+    const sr=22050,stepSec=0.135,steps=16,stepSamples=Math.floor(sr*stepSec),totalSamples=stepSamples*steps;
+    const buf=new ArrayBuffer(44+totalSamples*2),view=new DataView(buf);
+    const writeStr=(off,s)=>{for(let i=0;i<s.length;i++)view.setUint8(off+i,s.charCodeAt(i));};
+    writeStr(0,'RIFF');view.setUint32(4,36+totalSamples*2,true);writeStr(8,'WAVE');writeStr(12,'fmt ');
+    view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);
+    view.setUint32(24,sr,true);view.setUint32(28,sr*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);
+    writeStr(36,'data');view.setUint32(40,totalSamples*2,true);
+    let offset=44;
+    for(let s=0;s<steps;s++){
+        const note=MENU_ARP_NOTES[s],bNote=MENU_BASS_NOTES[(s>>1)%MENU_BASS_NOTES.length];
+        for(let i=0;i<stepSamples;i++){
+            const t=i/sr,att=Math.min(1,t/0.008),dec=Math.exp(-t*13);
+            let sample=(Math.sin(t*note*Math.PI*2)*0.65+Math.sin(t*note*0.5*Math.PI*2)*0.35)*0.26*att*dec;
+            if(s%2===0){
+                const bPhase=(t*bNote)%1;
+                sample+=((bPhase*2-1)*0.45+Math.sin(t*bNote*Math.PI*2)*0.55)*0.22*att*Math.exp(-t*11);
+            }
+            const clamped=Math.max(-0.95,Math.min(0.95,sample));
+            view.setInt16(offset,Math.floor(clamped*32767),true);
+            offset+=2;
+        }
+    }
+    return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
+}
+
+const menuUnlockAudio=new Audio(buildMenuAutoplayWavUrl());
+menuUnlockAudio.loop=true;
+menuUnlockAudio.preload='auto';
+menuUnlockAudio.playsInline=true;
+
+function tryStartMenuUnlockAudio(){
+    const isMenuOrPaused=!gameState.running||gameState.paused;
+    if(!isAppAudible()||!isMenuOrPaused||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01){
+        menuUnlockAudio.pause();
+        return;
+    }
+    if(audioCtx&&audioCtx.state==='running'){
+        menuUnlockAudio.pause();
+        return;
+    }
+    menuUnlockAudio.volume=Math.min(1,audioSettings.master*audioSettings.menuMusic*0.85);
+    if(menuUnlockAudio.paused){
+        menuUnlockAudio.muted=false;
+        menuUnlockAudio.play().catch(()=>{
+            menuUnlockAudio.muted=true;
+            menuUnlockAudio.play().then(()=>{
+                setTimeout(()=>{menuUnlockAudio.muted=false;},15);
+            }).catch(()=>{});
+        });
+    }
+}
+
 function isAppAudible(){
     return document.visibilityState!=='hidden'&&!document.hidden;
 }
@@ -681,11 +709,6 @@ async function renderDevCustomSongsList(){
     }catch(e){}
 }
 
-const MENU_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,293.66,261.63,349.23,440.00,523.25,440.00,349.23,329.63,293.66];
-const MENU_BASS_NOTES=[73.42,73.42,87.31,87.31,65.41,65.41,110.00,98.00];
-const GAME_BASS_NOTES=[73.42,73.42,146.83,73.42,87.31,87.31,98.00,110.00,73.42,73.42,146.83,73.42,116.54,116.54,110.00,98.00];
-const GAME_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,440.00,293.66,349.23,466.16,587.33,659.25,587.33,440.00,349.23];
-
 function scheduleMenuStepAt(noteTime){
     if(!audioCtx||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01)return;
     try{
@@ -766,7 +789,10 @@ function scheduleGameplaySynthStepAt(noteTime){
 }
 
 function ensureAudioEngine(){
-    if(audioCtx&&audioCtx.state==='running')return audioCtx;
+    if(audioCtx&&audioCtx.state==='running'){
+        menuUnlockAudio.pause();
+        return audioCtx;
+    }
     if(!audioCtx){
         const AC=window.AudioContext||window.webkitAudioContext;
         if(!AC)return null;
@@ -810,14 +836,19 @@ function ensureAudioEngine(){
             src.buffer=buf;src.connect(audioCtx.destination);src.start(0);
         }catch(e){}
         audioCtx.resume().then(()=>{
-            nextSynthNoteTime=audioCtx.currentTime+0.02;
-            nextMenuNoteTime=audioCtx.currentTime+0.02;
-        }).catch(()=>{});
+            menuUnlockAudio.pause();
+            nextSynthNoteTime=audioCtx.currentTime+0.015;
+            nextMenuNoteTime=audioCtx.currentTime+0.015;
+        }).catch(()=>{
+            tryStartMenuUnlockAudio();
+        });
+        tryStartMenuUnlockAudio();
     }
     return audioCtx;
 }
 
 function silenceAllAudioForBackground(){
+    menuUnlockAudio.pause();
     mitadruAudio.pause();
     customAudio.pause();
     if(engineGain&&audioCtx){
@@ -858,14 +889,18 @@ function startUnifiedMusicScheduler(){
     const STEP_MENU_SEC=0.135;
     const LOOKAHEAD_SEC=0.24;
     synthLoopTimer=setInterval(()=>{
-        if(!isAppAudible()||!audioCtx||audioSettings.master<=0.01)return;
-        if(audioCtx.state==='suspended'){
-            audioCtx.resume().catch(()=>{});
+        if(!isAppAudible()||!audioCtx||audioSettings.master<=0.01){
+            menuUnlockAudio.pause();
             return;
         }
-        if(audioCtx.state!=='running')return;
-        const now=audioCtx.currentTime;
         const isMenuOrPaused=!gameState.running||gameState.paused;
+        if(audioCtx.state!=='running'){
+            if(isMenuOrPaused)tryStartMenuUnlockAudio();
+            else menuUnlockAudio.pause();
+            return;
+        }
+        menuUnlockAudio.pause();
+        const now=audioCtx.currentTime;
         if(isMenuOrPaused){
             if(nextMenuNoteTime<now||nextMenuNoteTime>now+1.0)nextMenuNoteTime=now+0.015;
             while(nextMenuNoteTime<now+LOOKAHEAD_SEC){
@@ -889,7 +924,14 @@ function syncExternalTrackPlayback(){
     const shouldPlay=gameState.running&&!gameState.paused&&isAppAudible();
     mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
-    if(!shouldPlay){mitadruAudio.pause();customAudio.pause();return;}
+    menuUnlockAudio.volume=Math.min(1,audioSettings.master*audioSettings.menuMusic*0.85);
+    if(!shouldPlay){
+        mitadruAudio.pause();
+        customAudio.pause();
+        tryStartMenuUnlockAudio();
+        return;
+    }
+    menuUnlockAudio.pause();
     if(audioSettings.ostMode==='mitadru'){
         customAudio.pause();
         if(!mitadruAudio.src||mitadruAudio.src===window.location.href){mitadruIdx=0;mitadruAudio.src=mitadruCandidates[0];}
@@ -934,6 +976,7 @@ function updateVolumeSetting(ch,val){
     if(masterGainNode&&audioCtx)masterGainNode.gain.setTargetAtTime(audioSettings.master,audioCtx.currentTime,0.03);
     mitadruAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
     customAudio.volume=Math.min(1,audioSettings.master*audioSettings.music);
+    menuUnlockAudio.volume=Math.min(1,audioSettings.master*audioSettings.menuMusic*0.85);
     updateEngineSoundPitch();
     saveSettingsForActiveAccount();
 }
@@ -1033,11 +1076,13 @@ function triggerBlankSpaceAutoClick(){
     setTimeout(()=>{
         try{
             ensureAudioEngine();
+            tryStartMenuUnlockAudio();
             const blankTarget=document.getElementById('startModal')||document.body;
             blankTarget.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:2,clientY:2}));
             blankTarget.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:2,clientY:2}));
         }catch(e){
             ensureAudioEngine();
+            tryStartMenuUnlockAudio();
         }
     },1);
 }
@@ -1045,6 +1090,8 @@ function triggerBlankSpaceAutoClick(){
 function handleFirstGestureAudioUnlock(){
     if(!audioCtx||audioCtx.state!=='running'){
         ensureAudioEngine();
+    }else{
+        menuUnlockAudio.pause();
     }
 }
 ['touchstart','touchend','pointerdown','mousedown','keydown','click'].forEach(evt=>{
@@ -1376,9 +1423,9 @@ const GRAPHICS_PRESETS={
 };
 
 const gfxSettings={
-    preset:'low',filter:'filter-standard',resScale:0.75,roadSlices:18,particles:0.25,
-    bloom:false,shake:false,transitions:true,scanlines:false,
-    pillars:false,reflections:false,speedLines:false,hudBoxes:true
+    preset:'medium',filter:'filter-standard',resScale:1.00,roadSlices:26,particles:0.65,
+    bloom:true,shake:true,transitions:true,scanlines:false,
+    pillars:true,reflections:false,speedLines:false,hudBoxes:true
 };
 
 const GFX_TOGGLE_META=[
@@ -1397,9 +1444,8 @@ function buildGraphicsUI(){
     if(pGrid){
         pGrid.innerHTML=['low','medium','high','ultra'].map(k=>{
             const p=GRAPHICS_PRESETS[k];
-            const isRec=(k===recommendedPresetKey);
             const active=(gfxSettings.preset===k);
-            return `<button type="button" onclick="applyGraphicsPreset('${k}',true)" class="py-1.5 px-2 rounded-lg text-[10.5px] font-bold cursor-pointer border truncate ${active?'bg-sky-500 text-black border-sky-400':'bg-[#151a26] text-gray-300 border-[#262f45] hover:text-white'}">${p.title}${isRec?' (Rec)':''}</button>`;
+            return `<button type="button" onclick="applyGraphicsPreset('${k}',true)" class="py-1.5 px-2 rounded-lg text-[10.5px] font-bold cursor-pointer border truncate ${active?'bg-sky-500 text-black border-sky-400':'bg-[#151a26] text-gray-300 border-[#262f45] hover:text-white'}">${p.title}</button>`;
         }).join('');
     }
     const tGrid=document.getElementById('gfxTogglesGrid');
@@ -1423,10 +1469,10 @@ function buildGraphicsUI(){
 }
 
 function applyGraphicsPreset(presetKey,shouldSave=true){
-    const p=GRAPHICS_PRESETS[presetKey]||GRAPHICS_PRESETS[recommendedPresetKey];
-    gfxSettings.preset=presetKey;
+    const p=GRAPHICS_PRESETS[presetKey]||GRAPHICS_PRESETS.medium;
+    gfxSettings.preset=GRAPHICS_PRESETS[presetKey]?presetKey:'medium';
     const pLbl=document.getElementById('gfxPresetActiveLabel');
-    if(pLbl)pLbl.innerText=`${p.title.toUpperCase()}${presetKey===recommendedPresetKey?' (RECOMMENDED)':''}`;
+    if(pLbl)pLbl.innerText=p.title.toUpperCase();
     updateGfxResolution(Math.round(p.resScale*100),false);
     updateGfxDrawSlices(p.roadSlices,false);
     updateGfxParticles(Math.round(p.particles*100),false);
@@ -1645,17 +1691,16 @@ function resetControlSettingsOnly(){
 
 function resetGraphicsSettingsOnly(){
     setVisualFilter('filter-standard',false);
-    applyGraphicsPreset(recommendedPresetKey,true);
+    applyGraphicsPreset('medium',true);
 }
 
 function setDiscreteTargetLane(newLaneInt){
     const clamped=Math.max(-2,Math.min(2,Math.round(newLaneInt)));
     const prevLane=Math.round(gameState.targetLane);
     if(clamped!==prevLane){
-        const dir=clamped>prevLane?1:-1;
         gameState.targetLane=clamped;
         playGameSfx('steer');
-        gameState.egoRoll=dir*0.16;
+        gameState.egoRoll=0;
         checkPhantomFlashNearMiss(prevLane);
     }
 }
@@ -1738,6 +1783,8 @@ function openPauseSettingsModal(defaultTab='game'){
     ensureAudioEngine();
     if(gameState.running&&!gameState.paused){
         gameState.paused=true;
+        nextSynthNoteTime=0;
+        nextMenuNoteTime=0;
         syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
     }
     const resumeBtn=document.getElementById('resumeOrCloseSettingsBtn');
@@ -1768,6 +1815,8 @@ function resumeFromSettings(){
         requestMobileFullscreenSafe();
         if(controlConfig.mobileMode==='tilt')calibrateTiltSensor(true);
         gameState.paused=false;
+        nextMenuNoteTime=0;
+        nextSynthNoteTime=0;
         syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);
     }
     syncCursorVisibility();
@@ -1776,6 +1825,7 @@ function resumeFromSettings(){
 function returnToMainMenu(){
     ensureAudioEngine();
     gameState.running=false;gameState.paused=false;gameState.ep250WarnTimer=0;
+    nextSynthNoteTime=0;nextMenuNoteTime=0;
     syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(false);
     ['epoch250RedAlertModal','singularityAlertBanner','pauseSettingsModal','gameOverModal','leaderboardModal'].forEach(id=>document.getElementById(id).style.display='none');
     document.getElementById('startModal').style.display='flex';
@@ -1800,14 +1850,14 @@ const IDD_HAZARD_CLASSES=[
     {id:0,name:"auto_rickshaw",wPx:30,hPx:26,w:1.18,speedMul:0.55,color:"#f59e0b",roof:"#1e293b",points:120},
     {id:1,name:"bus_truck",    wPx:30,hPx:26,w:1.18,speedMul:0.45,color:"#ef4444",roof:"#450a0a",points:180},
     {id:2,name:"car",          wPx:30,hPx:26,w:1.18,speedMul:0.65,color:"#38bdf8",roof:"#0c4a6e",points:140},
-    {id:3,name:"two_wheeler",  wPx:30,hPx:26,w:1.18,speedMul:0.75,color:"#a855f7",roof:"#3b0764",points:160,weaves:true},
+    {id:3,name:"two_wheeler",  wPx:30,hPx:26,w:1.18,speedMul:0.75,color:"#a855f7",roof:"#3b0764",points:160,weaves:false},
     {id:4,name:"pedestrian",   wPx:30,hPx:26,w:1.18,speedMul:0.12,color:"#fb7185",roof:"#881337",points:200},
     {id:5,name:"stray_animal", wPx:30,hPx:26,w:1.18,speedMul:0.08,color:"#fbbf24",roof:"#78350f",points:190},
     {id:6,name:"pothole",      wPx:30,hPx:26,w:1.18,speedMul:0.00,color:"#64748b",roof:"#0f172a",points:100,flat:true},
     {id:7,name:"speed_bump",   wPx:30,hPx:26,w:1.18,speedMul:0.00,color:"#eab308",roof:"#422006",points:90, flat:true}
 ];
 
-const EGO_Z_REAR=1.24,EGO_Z_CENTER=1.45,EGO_Z_FRONT=1.70,EGO_HALF_LANE_W=0.35;
+const EGO_Z_REAR=1.24,EGO_Z_CENTER=1.45,EGO_Z_FRONT=1.70,EGO_HALF_LANE_W=0.32;
 
 function resizeGameCanvas(){
     detectDeviceHardware();
@@ -1868,6 +1918,7 @@ function triggerEpoch250BigRedWarning(){
 
 function startGameSession(startEpochOverride=1){
     ensureAudioEngine();
+    menuUnlockAudio.pause();
     if(!currentPilot.isCore){
         const idInp=document.getElementById('pilotIdInput');
         const gInp=document.getElementById('guestCallsignInput');
@@ -1896,6 +1947,8 @@ function startGameSession(startEpochOverride=1){
         slowMoTimer:0,empWaveRadius:0,screenShake:0,ep250WarnTriggered:(initEpoch>250),
         ep250WarnTimer:0,hazards:[],pickups:[],FloatingTexts:[]
     });
+    nextMenuNoteTime=0;
+    nextSynthNoteTime=0;
     syncBiomeForCurrentEpoch(true);
     if(initEpoch===249||initEpoch===250)triggerEpoch250BigRedWarning();
     syncExternalTrackPlayback();updateEngineSoundPitch();updateEqVisuals(true);
@@ -2036,11 +2089,10 @@ function updateGamePhysics(dt,now){
     const smoothAlpha=1-Math.exp(-18*dt);
     if(Math.abs(laneDiff)<0.003){
         gameState.egoLaneX=gameState.targetLane;
-        gameState.egoRoll*=Math.exp(-15*dt);
+        gameState.egoRoll=0;
     }else{
         gameState.egoLaneX+=laneDiff*smoothAlpha;
-        const targetRoll=Math.max(-0.18,Math.min(0.18,laneDiff*0.16));
-        gameState.egoRoll+=(targetRoll-gameState.egoRoll)*(1-Math.exp(-16*dt));
+        gameState.egoRoll=0;
     }
 
     if(gameState.screenShake>0)gameState.screenShake=Math.max(0,gameState.screenShake-dt*28);
@@ -2071,7 +2123,7 @@ function updateGamePhysics(dt,now){
     for(let i=gameState.hazards.length-1;i>=0;i--){
         const h=gameState.hazards[i];
         h.z-=Math.max(4,gameState.speedMps-h.speedMps)*effDt;
-        if(h.cls.weaves)h.lane=Math.max(-2,Math.min(2,h.baseLane+Math.sin(now*0.0025+h.phase)*0.32));
+        h.lane=h.baseLane;
         if(h.z<=EGO_Z_FRONT+0.35&&h.z>=EGO_Z_REAR-0.22){
             const latDist=Math.min(Math.abs(h.lane-gameState.egoLaneX),Math.abs(h.lane-gameState.targetLane));
             if(latDist<hitThresh){
@@ -2134,6 +2186,7 @@ function updateGamePhysics(dt,now){
 
 function triggerGameOver(){
     gameState.running=false;gameState.ep250WarnTimer=0;
+    nextSynthNoteTime=0;nextMenuNoteTime=0;
     document.getElementById('epoch250RedAlertModal').style.display='none';
     syncExternalTrackPlayback();updateEngineSoundPitch();
     saveActiveAccountStats(gameState.score,gameState.epoch,gameState.nearMisses);
@@ -2652,17 +2705,17 @@ function renderHighTextureDistinctHazard(hz,zSafe,W,H,roadCurve,dynamicWorldColo
     }else if(cid===5){
         ctx.fillStyle=hz.cls.roof;ctx.strokeStyle=primaryCol;ctx.lineWidth=1.6;
         ctx.beginPath();
-        ctx.moveTo(x1+5*s,y1+9*s);ctx.lineTo(x1+boxW-6*s,y1+9*s);ctx.lineTo(x1+boxW-4*s,y1+18*s);ctx.lineTo(x1+4*s,y1+18*s);
+        ctx.moveTo(x1+4*s,y1+9*s);ctx.lineTo(x1+boxW-4*s,y1+9*s);ctx.lineTo(x1+boxW-3*s,y1+18*s);ctx.lineTo(x1+3*s,y1+18*s);
         ctx.closePath();ctx.fill();ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(x1+2*s,y1+11*s);ctx.lineTo(x1+6*s,y1+3*s);ctx.lineTo(x1+11*s,y1+9*s);
+        ctx.moveTo(bx-5*s,y1+9*s);ctx.lineTo(bx,y1+3*s);ctx.lineTo(bx+5*s,y1+9*s);
         ctx.closePath();ctx.fill();ctx.stroke();
         ctx.strokeStyle="#fde68a";ctx.lineWidth=1.4;
-        ctx.beginPath();ctx.moveTo(x1+4*s,y1+4*s);ctx.lineTo(x1+1*s,y1+1*s);ctx.moveTo(x1+7*s,y1+4*s);ctx.lineTo(x1+9*s,y1+1*s);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(bx-3*s,y1+4*s);ctx.lineTo(bx-5*s,y1+1*s);ctx.moveTo(bx+3*s,y1+4*s);ctx.lineTo(bx+5*s,y1+1*s);ctx.stroke();
         ctx.fillStyle=primaryCol;
-        ctx.fillRect(x1+5*s,y1+18*s,3*s,7*s);ctx.fillRect(x1+10*s,y1+18*s,2.5*s,6.5*s);
-        ctx.fillRect(x1+boxW-12*s,y1+18*s,2.5*s,6.5*s);ctx.fillRect(x1+boxW-8*s,y1+18*s,3*s,7*s);
-        ctx.fillStyle="#00f5d4";ctx.fillRect(x1+4*s,y1+6*s,2*s,2*s);
+        ctx.fillRect(x1+4*s,y1+18*s,3*s,7*s);ctx.fillRect(x1+9*s,y1+18*s,2.5*s,6.5*s);
+        ctx.fillRect(x1+boxW-11.5*s,y1+18*s,2.5*s,6.5*s);ctx.fillRect(x1+boxW-7*s,y1+18*s,3*s,7*s);
+        ctx.fillStyle="#00f5d4";ctx.fillRect(bx-1.5*s,y1+6*s,3*s,2*s);
     }else if(cid===6){
         ctx.fillStyle="#05070c";ctx.strokeStyle=primaryCol;ctx.lineWidth=1.8;
         ctx.beginPath();
@@ -2844,16 +2897,16 @@ function renderSceneFrame(now){
         renderHighTextureDistinctHazard(hz,Math.max(0.55,hz.z),W,H,roadCurve,dynamicWorldColor,isCosmic250,cosmicHue);
     }
 
-    const carCenterX=Math.round(projectX(gameState.egoLaneX,EGO_Z_REAR,W,H,roadCurve));
+    const carCenterX=Math.round(projectX(gameState.egoLaneX,EGO_Z_CENTER,W,H,roadCurve));
     const rearY=Math.round(projectY(EGO_Z_REAR,0,H));
-    const egoScale=(H*0.85)/EGO_Z_REAR;
+    const egoScale=(H*0.85)/EGO_Z_CENTER;
     const carHalfW=Math.round(EGO_HALF_LANE_W*LANE_WIDTH_M*egoScale*0.24);
     const frontY=Math.round(projectY(EGO_Z_FRONT,0.30,H));
     const roofY=Math.round(projectY(EGO_Z_CENTER,0.64,H));
     const rearLeftX=carCenterX-carHalfW;
     const rearRightX=carCenterX+carHalfW;
-    const frontHalfW=Math.round(carHalfW*0.64);
-    const roofHalfW=Math.round(carHalfW*0.45);
+    const frontHalfW=Math.round(carHalfW*0.76);
+    const roofHalfW=Math.round(carHalfW*0.54);
     const frontLeftX=carCenterX-frontHalfW;
     const frontRightX=carCenterX+frontHalfW;
     const roofLeftX=carCenterX-roofHalfW;
@@ -2891,7 +2944,7 @@ function renderSceneFrame(now){
     ctx.beginPath();
     ctx.moveTo(rearLeftX+carHalfW*0.28,rearY-2);ctx.lineTo(roofLeftX+2,roofY+3);
     ctx.moveTo(rearRightX-carHalfW*0.28,rearY-2);ctx.lineTo(roofRightX-2,roofY+3);
-    ctx.moveTo((roofLeftX+roofRightX)*0.5,roofY+12);ctx.lineTo(carCenterX,rearY-9);
+    ctx.moveTo(carCenterX,roofY+12);ctx.lineTo(carCenterX,rearY-9);
     ctx.stroke();
 
     ctx.fillStyle=activeLiveryProfile.canopyColor;
