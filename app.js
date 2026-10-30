@@ -1,3 +1,4 @@
+// ==================== CHUNK 1 OF 4 ====================
 const canvas=document.getElementById('gameCanvas');
 const ctx=canvas.getContext('2d',{alpha:false});
 const radarCanvas=document.getElementById('miniRadarCanvas');
@@ -44,7 +45,7 @@ for(let i=0;i<85;i++){
 
 let spawnAccumulator=0,pickupAccumulator=0,radarAngle=Math.PI;
 let lastRawLandscapeTilt=0,smoothedGyroDelta=0,needsSilentGyroCalib=true,hasGyroReading=false;
-let awaitingRebindAction=null,lastHudUpdateTime=0,lastLiveLbPushTime=0;
+let awaitingRebindAction=null,lastHudUpdateTime=0,lastLiveLbPushTime=0,doubleTapBoostTimer=null;
 const domCache={};
 let cachedGradients={key:'',sky:null,sun:null};
 
@@ -481,10 +482,10 @@ function toggleAutoBiomeCycle(){
     syncAutoBiomeButtonUI();
     saveSettingsForActiveAccount();
 }
-
+// ==================== CHUNK 2 OF 4 ====================
 const audioSettings={master:0.95,music:0.90,menuMusic:0.85,engine:0.80,sfx:0.92,uiClick:0.85,ostMode:'synth'};
 let audioCtx=null,masterGainNode=null,musicBusNode=null,sfxBusNode=null,engineOsc1=null,engineOsc2=null,engineGain=null,synthLoopTimer=null,synthStep=0,menuStep=0;
-let nextSynthNoteTime=0,nextMenuNoteTime=0;
+let nextSynthNoteTime=0,nextMenuNoteTime=0,hasTrustedGesture=false;
 const lastSfxTime={};
 
 const MENU_ARP_NOTES=[293.66,349.23,440.00,587.33,523.25,440.00,349.23,293.66,261.63,349.23,440.00,523.25,440.00,349.23,329.63,293.66];
@@ -505,10 +506,12 @@ function buildMenuAutoplayWavUrl(){
         const note=MENU_ARP_NOTES[s],bNote=MENU_BASS_NOTES[(s>>1)%MENU_BASS_NOTES.length];
         for(let i=0;i<stepSamples;i++){
             const t=i/sr,att=Math.min(1,t/0.008),dec=Math.exp(-t*13);
-            let sample=(Math.sin(t*note*Math.PI*2)*0.65+Math.sin(t*note*0.5*Math.PI*2)*0.35)*0.26*att*dec;
+            const tri=(2/Math.PI)*Math.asin(Math.sin(t*note*Math.PI*2));
+            let sample=(tri*0.60+Math.sin(t*note*0.5*Math.PI*2)*0.40)*0.24*att*dec;
             if(s%2===0){
-                const bPhase=(t*bNote)%1;
-                sample+=((bPhase*2-1)*0.45+Math.sin(t*bNote*Math.PI*2)*0.55)*0.22*att*Math.exp(-t*11);
+                const bFund=Math.sin(t*bNote*Math.PI*2);
+                const bHarm=Math.sin(t*bNote*2*Math.PI*2)*0.45+Math.sin(t*bNote*3*Math.PI*2)*0.20;
+                sample+=(bFund*0.65+bHarm*0.35)*0.20*att*Math.exp(-t*11);
             }
             const clamped=Math.max(-0.95,Math.min(0.95,sample));
             view.setInt16(offset,Math.floor(clamped*32767),true);
@@ -518,12 +521,31 @@ function buildMenuAutoplayWavUrl(){
     return URL.createObjectURL(new Blob([buf],{type:'audio/wav'}));
 }
 
-const menuUnlockAudio=new Audio(buildMenuAutoplayWavUrl());
+const menuUnlockAudio=document.createElement('audio');
+menuUnlockAudio.id='mainMenuLoopAudio';
+menuUnlockAudio.src=buildMenuAutoplayWavUrl();
 menuUnlockAudio.loop=true;
 menuUnlockAudio.preload='auto';
 menuUnlockAudio.playsInline=true;
+menuUnlockAudio.setAttribute('playsinline','');
+menuUnlockAudio.setAttribute('webkit-playsinline','');
+menuUnlockAudio.setAttribute('autoplay','');
+menuUnlockAudio.style.display='none';
+
+function mountMenuAudioToMainPage(){
+    const host=document.getElementById('startModal')||document.body;
+    if(host&&!document.getElementById('mainMenuLoopAudio')){
+        host.appendChild(menuUnlockAudio);
+    }
+}
+mountMenuAudioToMainPage();
+
+function isUserActivationReady(){
+    return Boolean(hasTrustedGesture||(navigator.userActivation&&(navigator.userActivation.isActive||navigator.userActivation.hasBeenActive)));
+}
 
 function tryStartMenuUnlockAudio(){
+    mountMenuAudioToMainPage();
     const isMenuOrPaused=!gameState.running||gameState.paused;
     if(!isAppAudible()||!isMenuOrPaused||audioSettings.master<=0.01||audioSettings.menuMusic<=0.01){
         menuUnlockAudio.pause();
@@ -536,12 +558,10 @@ function tryStartMenuUnlockAudio(){
     menuUnlockAudio.volume=Math.min(1,audioSettings.master*audioSettings.menuMusic*0.85);
     if(menuUnlockAudio.paused){
         menuUnlockAudio.muted=false;
-        menuUnlockAudio.play().catch(()=>{
-            menuUnlockAudio.muted=true;
-            menuUnlockAudio.play().then(()=>{
-                setTimeout(()=>{menuUnlockAudio.muted=false;},15);
-            }).catch(()=>{});
-        });
+        const p=menuUnlockAudio.play();
+        if(p&&typeof p.catch==='function'){
+            p.catch(()=>{});
+        }
     }
 }
 
@@ -793,6 +813,10 @@ function ensureAudioEngine(){
         menuUnlockAudio.pause();
         return audioCtx;
     }
+    if(!isUserActivationReady()){
+        tryStartMenuUnlockAudio();
+        return null;
+    }
     if(!audioCtx){
         const AC=window.AudioContext||window.webkitAudioContext;
         if(!AC)return null;
@@ -827,14 +851,8 @@ function ensureAudioEngine(){
         engineGain.connect(sfxBusNode);
         engineOsc1.start();
         engineOsc2.start();
-        startUnifiedMusicScheduler();
     }
     if(isAppAudible()&&audioCtx.state!=='running'){
-        try{
-            const buf=audioCtx.createBuffer(1,1,22050);
-            const src=audioCtx.createBufferSource();
-            src.buffer=buf;src.connect(audioCtx.destination);src.start(0);
-        }catch(e){}
         audioCtx.resume().then(()=>{
             menuUnlockAudio.pause();
             nextSynthNoteTime=audioCtx.currentTime+0.015;
@@ -842,7 +860,6 @@ function ensureAudioEngine(){
         }).catch(()=>{
             tryStartMenuUnlockAudio();
         });
-        tryStartMenuUnlockAudio();
     }
     return audioCtx;
 }
@@ -862,7 +879,7 @@ function silenceAllAudioForBackground(){
 
 function resumeAudioForForeground(){
     if(!isAppAudible())return;
-    ensureAudioEngine();
+    if(isUserActivationReady())ensureAudioEngine();
     syncExternalTrackPlayback();
     updateEngineSoundPitch();
     updateEqVisuals(gameState.running&&!gameState.paused);
@@ -889,12 +906,13 @@ function startUnifiedMusicScheduler(){
     const STEP_MENU_SEC=0.135;
     const LOOKAHEAD_SEC=0.24;
     synthLoopTimer=setInterval(()=>{
-        if(!isAppAudible()||!audioCtx||audioSettings.master<=0.01){
+        if(!isAppAudible()||audioSettings.master<=0.01){
             menuUnlockAudio.pause();
             return;
         }
         const isMenuOrPaused=!gameState.running||gameState.paused;
-        if(audioCtx.state!=='running'){
+        if(!audioCtx||audioCtx.state!=='running'){
+            if(isUserActivationReady()&&!audioCtx)ensureAudioEngine();
             if(isMenuOrPaused)tryStartMenuUnlockAudio();
             else menuUnlockAudio.pause();
             return;
@@ -1074,24 +1092,22 @@ function playGameSfx(type){
 
 function triggerBlankSpaceAutoClick(){
     setTimeout(()=>{
-        try{
-            ensureAudioEngine();
-            tryStartMenuUnlockAudio();
-            const blankTarget=document.getElementById('startModal')||document.body;
-            blankTarget.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,clientX:2,clientY:2}));
-            blankTarget.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,clientX:2,clientY:2}));
-        }catch(e){
-            ensureAudioEngine();
-            tryStartMenuUnlockAudio();
-        }
+        mountMenuAudioToMainPage();
+        tryStartMenuUnlockAudio();
+        if(isUserActivationReady())ensureAudioEngine();
     },1);
 }
 
-function handleFirstGestureAudioUnlock(){
-    if(!audioCtx||audioCtx.state!=='running'){
-        ensureAudioEngine();
+function handleFirstGestureAudioUnlock(e){
+    if(e&&e.isTrusted)hasTrustedGesture=true;
+    if(isUserActivationReady()){
+        if(!audioCtx||audioCtx.state!=='running'){
+            ensureAudioEngine();
+        }else{
+            menuUnlockAudio.pause();
+        }
     }else{
-        menuUnlockAudio.pause();
+        tryStartMenuUnlockAudio();
     }
 }
 ['touchstart','touchend','pointerdown','mousedown','keydown','click'].forEach(evt=>{
@@ -1099,6 +1115,7 @@ function handleFirstGestureAudioUnlock(){
 });
 
 document.addEventListener('pointerdown',(e)=>{
+    if(e.isTrusted)hasTrustedGesture=true;
     const btn=e.target.closest('button');
     if(btn&&!btn.disabled&&!btn.classList.contains('touch-paddle'))playGameSfx('uiClick');
 },{passive:true});
@@ -1341,7 +1358,7 @@ function adminResetAllLeaderboardScores(){
     refreshAccountStatsUI();
     showDevConsoleFeedback("✓ All Leaderboard Scores (Including Core) Reset!");
 }
-
+// ==================== CHUNK 3 OF 4 ====================
 function syncDevDimensionsButtonLabel(){
     const btn=document.getElementById('devToggleDimsBtn');
     if(!btn)return;
@@ -1731,7 +1748,6 @@ function getPointerGameCoords(e){
 function handleCanvasTapLane(e){
     const {x,y,W,H}=getPointerGameCoords(e);
     const horizonY=H*0.42;
-    const roadCurve=Math.sin(gameState.distanceM*0.012)*0.65;
     let zTap=EGO_Z_CENTER;
     if(y>horizonY+12){
         const scale=(y-horizonY)/(1.72*0.36);
@@ -1741,7 +1757,7 @@ function handleCanvasTapLane(e){
     let minDist=Infinity;
     for(let i=0;i<LANES.length;i++){
         const l=LANES[i];
-        const lx=projectX(l,zTap,W,H,roadCurve);
+        const lx=projectX(l,zTap,W,H,0);
         const d=Math.abs(x-lx);
         if(d<minDist){
             minDist=d;
@@ -1917,6 +1933,7 @@ function triggerEpoch250BigRedWarning(){
 }
 
 function startGameSession(startEpochOverride=1){
+    hasTrustedGesture=true;
     ensureAudioEngine();
     menuUnlockAudio.pause();
     if(!currentPilot.isCore){
@@ -2034,7 +2051,7 @@ function spawnFloatingText(text,color,ox=0,oy=0){
     gameState.FloatingTexts.push({text,color,x:(gameState.viewW||800)*0.5+ox,y:(gameState.viewH||450)*0.42+oy,life:1.0});
 }
 
-function projectX(laneOffset,zSafe,W,H,roadCurve){
+function projectX(laneOffset,zSafe,W,H,roadCurve=0){
     const scale=(H*0.85)/zSafe;
     const zNorm=zSafe*0.0181818;
     const curveShift=roadCurve*(zNorm*zNorm)*(W*0.22);
@@ -2265,7 +2282,7 @@ function renderMiniRadar(){
         }
     }
 }
-
+// ==================== CHUNK 4 OF 4 ====================
 function ensureCachedBiomeGradients(W,H,horizonY,theme){
     const key=`${W}_${H}_${biomeIdx}`;
     if(cachedGradients.key===key)return;
@@ -2793,7 +2810,7 @@ function renderSceneFrame(now){
     ctx.fillStyle=theme.roadDark;
     ctx.fillRect(0,horizonY,W,H-horizonY);
 
-    const roadCurve=Math.sin(gameState.distanceM*0.012)*0.65;
+    const roadCurve=0;
     const totalSlices=gfxSettings.roadSlices||(isMobileHardware?26:36);
     const sliceStep=55.0/totalSlices;
 
@@ -2898,11 +2915,11 @@ function renderSceneFrame(now){
     }
 
     const carCenterX=Math.round(projectX(gameState.egoLaneX,EGO_Z_CENTER,W,H,roadCurve));
-    const rearY=Math.round(projectY(EGO_Z_REAR,0,H));
+    const rearY=Math.round(projectY(EGO_Z_CENTER,0,H));
     const egoScale=(H*0.85)/EGO_Z_CENTER;
     const carHalfW=Math.round(EGO_HALF_LANE_W*LANE_WIDTH_M*egoScale*0.24);
-    const frontY=Math.round(projectY(EGO_Z_FRONT,0.30,H));
-    const roofY=Math.round(projectY(EGO_Z_CENTER,0.64,H));
+    const frontY=Math.round(projectY(EGO_Z_CENTER,0.48,H));
+    const roofY=Math.round(projectY(EGO_Z_CENTER,0.72,H));
     const rearLeftX=carCenterX-carHalfW;
     const rearRightX=carCenterX+carHalfW;
     const frontHalfW=Math.round(carHalfW*0.76);
@@ -3066,20 +3083,31 @@ window.addEventListener('deviceorientation',(e)=>{
     setMagneticTargetLane(continuousLane);
 });
 
+window.addEventListener('pointercancel',()=>{
+    setBoosting(false);
+    setBraking(false);
+    document.querySelectorAll('.touch-paddle.active-press').forEach(el=>el.classList.remove('active-press'));
+});
+
 canvas.addEventListener('pointerdown',(e)=>{
+    if(e.isTrusted)hasTrustedGesture=true;
     if(isMobileHardware&&gameState.running&&!document.fullscreenElement){
         requestMobileFullscreenSafe();
     }
     if(!gameState.running||gameState.paused)return;
     const now=performance.now();
-    if(controlConfig.doubleTapNitro&&(now-controlConfig.lastTouchTime<260)){
-        setBoosting(true);setTimeout(()=>setBoosting(false),1100);
+    const dtTap=now-controlConfig.lastTouchTime;
+    if(controlConfig.doubleTapNitro&&dtTap>40&&dtTap<260){
+        setBoosting(true);
+        if(doubleTapBoostTimer)clearTimeout(doubleTapBoostTimer);
+        doubleTapBoostTimer=setTimeout(()=>setBoosting(false),1100);
     }
     controlConfig.lastTouchTime=now;
     if(controlConfig.mobileMode==='drag')handleCanvasTapLane(e);
 });
 
 window.addEventListener('keydown',(e)=>{
+    if(e.isTrusted)hasTrustedGesture=true;
     ensureAudioEngine();
     const k=e.key.toLowerCase();
     if(awaitingRebindAction){
@@ -3128,6 +3156,7 @@ updateTopLeaderBanner();
 renderMiniRadar();
 pullGlobalCloudLeaderboard();
 startLiveLeaderboardStream();
+startUnifiedMusicScheduler();
 triggerBlankSpaceAutoClick();
 window.addEventListener('DOMContentLoaded',triggerBlankSpaceAutoClick);
 window.addEventListener('load',triggerBlankSpaceAutoClick);
