@@ -3065,6 +3065,7 @@ function renderMiniRadar(){
 // ==================== END OF CHUNK 5 OF 6 ====================
 // ==================== START OF CHUNK 6 OF 6 ====================
 // --- START OF MINI-CHUNK 6.1 OF 4 ---
+// --- START OF MINI-CHUNK 6.1 OF 4 ---
 ['low','medium','high','ultra'].forEach(k=>{
     if(GRAPHICS_PRESETS[k])GRAPHICS_PRESETS[k].legacyModels=false;
 });
@@ -3150,6 +3151,106 @@ function updateGfxParticles(val,shouldSave=true){
     }
     if(shouldSave)saveSettingsForActiveAccount();
 }
+
+// Fix Settings Sliders (<input type="range">) & Modal Scrolling on Non-Fullscreen & Fullscreen Android
+(function bindMobileNonFullscreenSlidersAndScroll(){
+    if(window._mobRotSliderBound)return;
+    window._mobRotSliderBound=true;
+
+    let activeSlider=null;
+    let activeScroller=null;
+    let lastClientX=0,lastClientY=0;
+
+    const setSliderFromPoint=(clientX,clientY,sld)=>{
+        const rect=sld.getBoundingClientRect();
+        if(!rect.width&&!rect.height)return;
+        const isRotated=isMobileHardware&&(window.innerHeight>window.innerWidth);
+        const ratio=isRotated
+            ?((clientY-rect.top)/Math.max(1,rect.height))
+            :((clientX-rect.left)/Math.max(1,rect.width));
+        const clamped=Math.max(0,Math.min(1,ratio));
+        const min=parseFloat(sld.min)||0;
+        const max=parseFloat(sld.max)||100;
+        const step=parseFloat(sld.step)||1;
+        let val=min+clamped*(max-min);
+        val=Math.round((val-min)/step)*step+min;
+        val=Math.max(min,Math.min(max,val));
+        if(String(sld.value)!==String(val)){
+            sld.value=val;
+            sld.dispatchEvent(new Event('input',{bubbles:true}));
+            sld.dispatchEvent(new Event('change',{bubbles:true}));
+        }
+    };
+
+    document.addEventListener('touchstart',(e)=>{
+        if(!isMobileHardware||!e.touches||!e.touches[0])return;
+        const t=e.touches[0];
+        const sld=e.target&&e.target.closest?e.target.closest('input[type="range"]'):null;
+        if(sld){
+            activeSlider=sld;
+            activeScroller=null;
+            if(window.innerHeight>window.innerWidth&&e.cancelable)e.preventDefault();
+            setSliderFromPoint(t.clientX,t.clientY,sld);
+            return;
+        }
+        const scroller=e.target&&e.target.closest?e.target.closest('.overflow-y-auto'):null;
+        if(scroller&&(window.innerHeight>window.innerWidth)){
+            activeScroller=scroller;
+            lastClientX=t.clientX;
+            lastClientY=t.clientY;
+        }
+    },{capture:true,passive:false});
+
+    document.addEventListener('touchmove',(e)=>{
+        if(!e.touches||!e.touches[0])return;
+        const t=e.touches[0];
+        if(activeSlider){
+            if(e.cancelable)e.preventDefault();
+            e.stopPropagation();
+            setSliderFromPoint(t.clientX,t.clientY,activeSlider);
+            return;
+        }
+        if(activeScroller&&(window.innerHeight>window.innerWidth)){
+            const dx=t.clientX-lastClientX;
+            if(Math.abs(dx)>1.5){
+                if(e.cancelable)e.preventDefault();
+                activeScroller.scrollTop+=dx;
+                lastClientX=t.clientX;
+                lastClientY=t.clientY;
+            }
+        }
+    },{capture:true,passive:false});
+
+    ['touchend','touchcancel'].forEach(evt=>{
+        document.addEventListener(evt,()=>{
+            activeSlider=null;
+            activeScroller=null;
+        },{capture:true,passive:true});
+    });
+
+    document.addEventListener('pointerdown',(e)=>{
+        if(!isMobileHardware||(e.pointerType==='touch'&&'ontouchstart' in window))return;
+        const sld=e.target&&e.target.closest?e.target.closest('input[type="range"]'):null;
+        if(sld){
+            activeSlider=sld;
+            if(window.innerHeight>window.innerWidth&&e.cancelable)e.preventDefault();
+            try{sld.setPointerCapture(e.pointerId);}catch(err){}
+            setSliderFromPoint(e.clientX,e.clientY,sld);
+        }
+    },{capture:true,passive:false});
+
+    document.addEventListener('pointermove',(e)=>{
+        if(!activeSlider||(e.pointerType==='touch'&&'ontouchstart' in window))return;
+        if(e.cancelable)e.preventDefault();
+        setSliderFromPoint(e.clientX,e.clientY,activeSlider);
+    },{capture:true,passive:false});
+
+    ['pointerup','pointercancel'].forEach(evt=>{
+        document.addEventListener(evt,()=>{
+            if(e.pointerType!=='touch')activeSlider=null;
+        },{capture:true,passive:true});
+    });
+})();
 
 // Anti-Misclick Shield between Start Splash and Main Menu (Mobile & PC)
 let mainMenuSplashGuardUntil=0;
@@ -3737,8 +3838,7 @@ function ensureHazardVariant(hz){
         hz.variantIdx=rngBit%2;
     }
 }
-// --- END OF MINI-CHUNK 6.1 OF 4 ---
-// --- START OF MINI-CHUNK 6.2 OF 4 ---
+// --- END OF MINI-CHUNK 6.1 OF 4 ---// --- START OF MINI-CHUNK 6.2 OF 4 ---
 function ensureCachedBiomeGradients(W,H,horizonY,theme){
     const key=`${W}_${H}_${biomeIdx}`;
     if(cachedGradients.key===key)return;
