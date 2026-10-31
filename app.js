@@ -1533,7 +1533,7 @@ function adminResetAllLeaderboardScores(){
 function syncDevDimensionsButtonLabel(){
     const btn=document.getElementById('devToggleDimsBtn');
     if(!btn)return;
-    btn.innerText=devAllDimensionsUnlocked?"🔒 Relock All Dimensions":"🔓 Unlock All Dimensions (Incl. Ep 250)";
+    btn.innerText=devAllDimensionsUnlocked?"🔒 Relock All Dimensions":"🔓 Unlock All Dimensions";
     btn.className=devAllDimensionsUnlocked
         ?"p-2 rounded-xl bg-amber-950/70 hover:bg-amber-800/80 text-amber-200 border border-amber-500/40 text-[10.5px] mono-num font-bold cursor-pointer text-center"
         :"p-2 rounded-xl bg-purple-950/70 hover:bg-purple-800/80 text-purple-200 border border-purple-500/40 text-[10.5px] mono-num font-bold cursor-pointer text-center";
