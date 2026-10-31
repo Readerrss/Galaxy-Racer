@@ -1,62 +1,398 @@
 @import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700;800&display=swap');
-:root{--bg-canvas:#05070b;--surface-recessed:#0b0d13;--border-subtle:#232836;--border-highlight:rgba(255,255,255,0.08);}
-*{box-sizing:border-box;margin:0;padding:0;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;}
-body,html{width:100%;height:100%;overflow:hidden;background:var(--bg-canvas);color:#e2e8f0;font-family:'DM Sans',sans-serif;touch-action:none;-webkit-font-smoothing:antialiased;}
-body.is-pc.gameplay-active,body.is-pc.gameplay-active *{cursor:none!important;}
-body.is-pc .mobile-only-ui{display:none!important;}
-body.is-mobile .pc-only-ui{display:none!important;}
-#gameViewportWrapper.hud-hidden .hud-collapsible{opacity:0!important;pointer-events:none!important;transform:translateY(-4px);}
-#gameViewportWrapper.hud-hidden #mobilePauseBtn{display:none!important;}
-#gameViewportWrapper.hud-hidden #mobileTopRightPill{background:transparent!important;border-color:transparent!important;box-shadow:none!important;padding:0!important;}
-.hud-collapsible{transition:opacity 0.15s ease,transform 0.15s ease;}
-.mono-num{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;}
-.title-cinzel{font-family:'Cinzel Decorative',serif;}
-.hardware-panel{background-color:rgba(13,16,24,0.94);border:1px solid var(--border-subtle);border-top-color:var(--border-highlight);box-shadow:0 8px 20px -6px rgba(0,0,0,0.85);}
-body.is-pc .hardware-panel{backdrop-filter:blur(8px);}
-.recessed-well{background-color:var(--surface-recessed);border:1px solid #1b202b;}
-.btn-launch{background:linear-gradient(135deg,#059669 0%,#10b981 50%,#0284c7 100%);color:#03150e;font-weight:800;border:1px solid rgba(255,255,255,0.3);box-shadow:0 6px 20px rgba(16,185,129,0.35);transition:transform 0.12s ease,filter 0.12s ease;}
-.btn-launch:hover{transform:translateY(-1px);filter:brightness(1.08);}
-#gameViewportWrapper{position:fixed;top:0;left:0;width:100%;height:100%;overflow:hidden;background:#05070b;}
-canvas#gameCanvas{position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1;}
-.filter-standard{filter:none;}
-.filter-requiem-noir{filter:grayscale(100%) contrast(160%) brightness(92%);}
-.filter-requiem-ash{filter:grayscale(78%) contrast(145%) brightness(88%) sepia(14%) hue-rotate(175deg);}
-.filter-dl2-grit{filter:saturate(46%) sepia(25%) contrast(138%) brightness(94%);}
-.filter-dl2-darkzone{filter:saturate(58%) contrast(155%) brightness(84%);}
-.filter-stark-mono{filter:grayscale(95%) contrast(180%) brightness(95%);}
-#atmosphereOverlay{position:absolute;inset:0;pointer-events:none;z-index:5;background:radial-gradient(circle at center,transparent 65%,rgba(0,0,0,0.55) 100%);}
-#atmosphereOverlay.scanlines-active::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0px,rgba(0,0,0,0) 2px,rgba(0,0,0,0.48) 3px,rgba(0,0,0,0.48) 4px),repeating-linear-gradient(to right,rgba(255,0,128,0.04) 0px,rgba(0,255,255,0.04) 2px,transparent 4px);box-shadow:inset 0 0 45px rgba(0,245,212,0.12);}
-#hudEpoch,#hudScore,#hudCombo,#hudArmorPct,#hudWarningBadge,#hudBiomeName{white-space:nowrap!important;display:inline-block;}
-header{padding-left:max(0.35rem,env(safe-area-inset-left))!important;padding-right:max(0.35rem,env(safe-area-inset-right))!important;padding-top:max(0.3rem,env(safe-area-inset-top))!important;}
-footer{padding-left:max(0.5rem,env(safe-area-inset-left))!important;padding-right:max(0.5rem,env(safe-area-inset-right))!important;padding-bottom:max(0.45rem,env(safe-area-inset-bottom))!important;}
-@media (max-width:920px),(max-height:520px){
-header>div{gap:0.25rem!important;width:100%!important;max-width:100%!important;}
-header .hardware-panel{padding:0.2rem 0.4rem!important;gap:0.25rem!important;border-radius:0.65rem!important;}
-header .recessed-well{padding:0.1rem 0.32rem!important;font-size:9px!important;}
-#hudPilotCallsign{max-width:52px!important;font-size:8.5px!important;}
-#hudBiomeName{max-width:68px!important;font-size:8.5px!important;}
-#mobilePauseBtn,#mobileHideUiBtn{padding:0.22rem 0.45rem!important;font-size:9.5px!important;}
+
+:root {
+    --bg-canvas: #05070b;
+    --surface-recessed: #0b0d13;
+    --border-subtle: #232836;
+    --border-highlight: rgba(255, 255, 255, 0.08);
 }
-@keyframes voidPrismaticShift{0%,100%{background-position:0% 50%;box-shadow:0 0 14px rgba(0,245,212,0.45);border-color:#00f5d4;}50%{background-position:100% 50%;box-shadow:0 0 18px rgba(255,0,127,0.55);border-color:#ff007f;}}
-.void-leaderboard-card{background:linear-gradient(120deg,rgba(10,14,26,0.95) 0%,rgba(36,12,58,0.85) 35%,rgba(8,45,62,0.85) 70%,rgba(10,14,26,0.95) 100%);background-size:240% 240%;border:1.5px solid #00f5d4;animation:voidPrismaticShift 3.5s ease-in-out infinite;}
-.void-name-glow{background:linear-gradient(90deg,#00f5d4,#00bbf9,#c77dff,#ff007f,#ffbe0b,#00f5d4);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:voidPrismaticShift 3s linear infinite;font-weight:800;}
-.core-glow-ritam{border:1px solid rgba(245,158,11,0.7);box-shadow:0 0 12px rgba(245,158,11,0.22);}
-.core-glow-meraj{border:1px solid rgba(239,68,68,0.7);box-shadow:0 0 12px rgba(239,68,68,0.22);}
-.core-glow-sourajita{border:1px solid rgba(16,185,129,0.7);box-shadow:0 0 12px rgba(16,185,129,0.22);}
-.core-glow-debankita{border:1px solid rgba(168,85,247,0.7);box-shadow:0 0 12px rgba(168,85,247,0.22);}
-@keyframes eqBounce{0%,100%{height:4px;}50%{height:11px;}}
-.eq-1{animation:eqBounce 0.48s ease-in-out infinite;}
-.eq-2{animation:eqBounce 0.35s ease-in-out infinite 0.12s;}
-.eq-3{animation:eqBounce 0.58s ease-in-out infinite 0.24s;}
-.eq-paused{animation:none!important;height:4px!important;}
-.touch-paddle{background:linear-gradient(180deg,rgba(24,31,46,0.96) 0%,rgba(12,16,25,0.96) 100%);border:1px solid rgba(56,189,248,0.42);box-shadow:0 4px 10px rgba(0,0,0,0.6);transition:transform 0.05s ease,background 0.05s ease;}
-.touch-paddle:active,.touch-paddle.active-press{transform:scale(0.93);background:rgba(56,189,248,0.34);border-color:#38bdf8;}
-@keyframes modalPop{from{opacity:0;transform:scale(0.97) translateY(4px);}to{opacity:1;transform:scale(1) translateY(0);}}
-.modal-anim{animation:modalPop 0.16s cubic-bezier(0.16,1,0.3,1) forwards;}
-@keyframes redKlaxonFlash{0%,100%{transform:scale(1);box-shadow:0 0 35px rgba(239,68,68,0.95);border-color:#ef4444;background:rgba(69,10,10,0.94);}50%{transform:scale(1.04);box-shadow:0 0 65px rgba(255,30,66,1);border-color:#fecdd3;background:rgba(127,29,29,0.96);}}
-.red-klaxon-banner{animation:redKlaxonFlash 0.38s ease-in-out infinite;}
-input::placeholder{color:#4b5563!important;opacity:1;}
-*{scrollbar-width:thin;scrollbar-color:#263044 #090b10;}
-::-webkit-scrollbar{width:5px;height:5px;}
-::-webkit-scrollbar-track{background:#090b10;}
-::-webkit-scrollbar-thumb{background:#263044;border-radius:4px;}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+body, html {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-canvas);
+    color: #e2e8f0;
+    font-family: 'DM Sans', sans-serif;
+    touch-action: none;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Fix touch dragging on all Settings sliders & scrolling inside modals on mobile */
+input[type="range"] {
+    touch-action: pan-x pan-y !important;
+    -webkit-user-select: auto !important;
+    user-select: auto !important;
+}
+input[type="text"], input[type="number"] {
+    touch-action: manipulation !important;
+    -webkit-user-select: text !important;
+    user-select: text !important;
+}
+.overflow-y-auto {
+    touch-action: pan-y !important;
+    -webkit-overflow-scrolling: touch;
+}
+
+body.is-pc.gameplay-active,
+body.is-pc.gameplay-active * {
+    cursor: none !important;
+}
+body.is-pc .mobile-only-ui {
+    display: none !important;
+}
+body.is-mobile .pc-only-ui {
+    display: none !important;
+}
+
+#gameViewportWrapper.hud-hidden .hud-collapsible {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateY(-4px);
+}
+#gameViewportWrapper.hud-hidden #mobilePauseBtn {
+    display: none !important;
+}
+#gameViewportWrapper.hud-hidden #mobileTopRightPill {
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+.hud-collapsible {
+    transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.mono-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-variant-numeric: tabular-nums;
+}
+.title-cinzel {
+    font-family: 'Cinzel Decorative', serif;
+}
+
+.hardware-panel {
+    background-color: rgba(13, 16, 24, 0.94);
+    border: 1px solid var(--border-subtle);
+    border-top-color: var(--border-highlight);
+    box-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.85);
+}
+body.is-pc .hardware-panel {
+    backdrop-filter: blur(8px);
+}
+.recessed-well {
+    background-color: var(--surface-recessed);
+    border: 1px solid #1b202b;
+}
+
+.btn-launch {
+    background: linear-gradient(135deg, #059669 0%, #10b981 50%, #0284c7 100%);
+    color: #03150e;
+    font-weight: 800;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35);
+    transition: transform 0.12s ease, filter 0.12s ease;
+}
+.btn-launch:hover {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+}
+
+#gameViewportWrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #05070b;
+}
+canvas#gameCanvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 1;
+}
+
+/* Visual & Optic Color Grade Filters */
+.filter-standard { filter: none !important; }
+.filter-bw { filter: grayscale(100%) contrast(145%) brightness(96%) !important; }
+.filter-negative { filter: invert(100%) hue-rotate(180deg) contrast(108%) !important; }
+.filter-warm { filter: sepia(52%) saturate(310%) hue-rotate(-22deg) contrast(124%) brightness(106%) !important; }
+.filter-vintage { filter: sepia(82%) saturate(72%) contrast(120%) brightness(88%) !important; }
+.filter-cinematic { filter: contrast(142%) saturate(168%) brightness(94%) hue-rotate(-14deg) !important; }
+.filter-requiem-noir { filter: grayscale(100%) contrast(160%) brightness(92%); }
+.filter-requiem-ash { filter: grayscale(78%) contrast(145%) brightness(88%) sepia(14%) hue-rotate(175deg); }
+.filter-dl2-grit { filter: saturate(46%) sepia(25%) contrast(138%) brightness(94%); }
+.filter-dl2-darkzone { filter: saturate(58%) contrast(155%) brightness(84%); }
+.filter-stark-mono { filter: grayscale(95%) contrast(180%) brightness(95%); }
+
+#atmosphereOverlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+    background: radial-gradient(circle at center, transparent 65%, rgba(0, 0, 0, 0.55) 100%);
+}
+#atmosphereOverlay.scanlines-active::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0) 0px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0.48) 3px, rgba(0, 0, 0, 0.48) 4px),
+                repeating-linear-gradient(to right, rgba(255, 0, 128, 0.04) 0px, rgba(0, 255, 255, 0.04) 2px, transparent 4px);
+    box-shadow: inset 0 0 45px rgba(0, 245, 212, 0.12);
+}
+
+#hudEpoch, #hudScore, #hudCombo, #hudArmorPct, #hudWarningBadge, #hudBiomeName, #hudNitroPct, #hudEmpPct {
+    white-space: nowrap !important;
+    display: inline-block;
+}
+
+header {
+    padding-left: max(0.45rem, env(safe-area-inset-left)) !important;
+    padding-right: max(0.45rem, env(safe-area-inset-right)) !important;
+    padding-top: max(0.35rem, env(safe-area-inset-top)) !important;
+}
+footer {
+    padding-left: max(0.55rem, env(safe-area-inset-left)) !important;
+    padding-right: max(0.55rem, env(safe-area-inset-right)) !important;
+    padding-bottom: max(0.45rem, env(safe-area-inset-bottom)) !important;
+}
+
+/* =========================================================================
+   LOCK FULLSCREEN-ANDROID LANDSCAPE UI & HUD LAYOUT ON ALL PHONES
+   (Works identically in non-fullscreen Portrait-rotated & Landscape modes)
+   ========================================================================= */
+body.is-mobile header {
+    padding: 0.35rem 0.55rem !important;
+}
+body.is-mobile header > div {
+    gap: 0.35rem !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+body.is-mobile header .hardware-panel {
+    padding: 0.25rem 0.55rem !important;
+    gap: 0.4rem !important;
+    border-radius: 0.75rem !important;
+}
+body.is-mobile header .recessed-well {
+    padding: 0.12rem 0.38rem !important;
+    font-size: 10px !important;
+}
+body.is-mobile #hudPilotCallsign {
+    max-width: 115px !important;
+    font-size: 10px !important;
+}
+body.is-mobile #hudBiomeName {
+    max-width: 135px !important;
+    font-size: 10px !important;
+}
+body.is-mobile #hudWarningBadge {
+    font-size: 9px !important;
+    padding: 0.12rem 0.38rem !important;
+}
+/* Keep "HULL" label visible and Hull bar wide like Fullscreen Android */
+body.is-mobile header .recessed-well > span.hidden {
+    display: inline !important;
+    font-size: 8.5px !important;
+}
+body.is-mobile header .recessed-well > div.w-7 {
+    width: 3.1rem !important;
+}
+body.is-mobile #mobilePauseBtn,
+body.is-mobile #mobileHideUiBtn {
+    padding: 0.25rem 0.55rem !important;
+    font-size: 10px !important;
+}
+
+/* Left Radar + Nitro/EMP Dock: Force Fullscreen Android `sm:w-24` (96px) so text never wraps */
+body.is-mobile div.hud-collapsible.absolute.left-2 {
+    top: 2.75rem !important;
+    left: 0.55rem !important;
+    gap: 0.35rem !important;
+}
+body.is-mobile div.hud-collapsible.absolute.left-2 > .hardware-panel {
+    width: 6rem !important;
+    padding: 0.38rem 0.45rem !important;
+}
+body.is-mobile div.hud-collapsible.absolute.left-2 .recessed-well {
+    width: 4.5rem !important;
+    height: 4.5rem !important;
+}
+body.is-mobile #hudDevRefillBtn {
+    white-space: nowrap !important;
+    font-size: 7.5px !important;
+    padding: 0.22rem 0.2rem !important;
+}
+
+/* Bottom Footer HUD & Touch Paddles */
+body.is-mobile footer {
+    padding: 0.25rem 0.55rem 0.4rem !important;
+}
+body.is-mobile footer > div.hud-collapsible {
+    padding: 0.32rem 0.7rem !important;
+    gap: 0.5rem !important;
+    font-size: 10px !important;
+}
+body.is-mobile .touch-paddle {
+    min-width: 58px !important;
+    min-height: 46px !important;
+    padding: 0.35rem 0.6rem !important;
+}
+
+/* Start Modal, Game Over Modal, Leaderboard & Settings Hub on Mobile Landscape */
+body.is-mobile #startModal > .hardware-panel,
+body.is-mobile #pauseSettingsModal > .hardware-panel,
+body.is-mobile #leaderboardModal > .hardware-panel,
+body.is-mobile #gameOverModal > .hardware-panel {
+    max-height: 94% !important;
+}
+body.is-mobile #pilotLoginInputRow {
+    flex-wrap: nowrap !important;
+}
+
+/* Force Settings Hub Grids to match Fullscreen Android (`sm:` multi-column layouts) */
+body.is-mobile #setTab_game .grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+body.is-mobile #vehicleLiveryGrid,
+body.is-mobile #biomeGridSelector {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+body.is-mobile #setTab_sounds .recessed-well > .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+body.is-mobile #volumeSlidersGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    column-gap: 1rem !important;
+    row-gap: 0.45rem !important;
+}
+body.is-mobile #gfxPresetButtonsGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+body.is-mobile #setTab_graphics .recessed-well > .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 0.65rem !important;
+}
+body.is-mobile #gfxTogglesGrid,
+body.is-mobile #gfxFilterButtonsGrid,
+body.is-mobile #pcKeybindGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+}
+body.is-mobile #setTab_dev .grid {
+    grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)) !important;
+}
+
+/* Extra-short non-fullscreen landscape viewport adaptation (when browser address bar is visible) */
+@media (max-height: 420px) {
+    #startModal > .hardware-panel {
+        padding: 0.55rem 0.85rem !important;
+        gap: 0.35rem !important;
+    }
+    #pauseSettingsModal > .hardware-panel {
+        max-height: 96% !important;
+    }
+    div.hud-collapsible.absolute.left-2 {
+        top: 2.45rem !important;
+        transform: scale(0.92);
+        transform-origin: top left;
+    }
+    footer .touch-paddle {
+        min-height: 42px !important;
+        padding: 0.25rem 0.5rem !important;
+    }
+}
+
+@keyframes voidPrismaticShift {
+    0%, 100% {
+        background-position: 0% 50%;
+        box-shadow: 0 0 14px rgba(0, 245, 212, 0.45);
+        border-color: #00f5d4;
+    }
+    50% {
+        background-position: 100% 50%;
+        box-shadow: 0 0 18px rgba(255, 0, 127, 0.55);
+        border-color: #ff007f;
+    }
+}
+.void-leaderboard-card {
+    background: linear-gradient(120deg, rgba(10, 14, 26, 0.95) 0%, rgba(36, 12, 58, 0.85) 35%, rgba(8, 45, 62, 0.85) 70%, rgba(10, 14, 26, 0.95) 100%);
+    background-size: 240% 240%;
+    border: 1.5px solid #00f5d4;
+    animation: voidPrismaticShift 3.5s ease-in-out infinite;
+}
+.void-name-glow {
+    background: linear-gradient(90deg, #00f5d4, #00bbf9, #c77dff, #ff007f, #ffbe0b, #00f5d4);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: voidPrismaticShift 3s linear infinite;
+    font-weight: 800;
+}
+.core-glow-ritam { border: 1px solid rgba(245, 158, 11, 0.7); box-shadow: 0 0 12px rgba(245, 158, 11, 0.22); }
+.core-glow-meraj { border: 1px solid rgba(239, 68, 68, 0.7); box-shadow: 0 0 12px rgba(239, 68, 68, 0.22); }
+.core-glow-sourajita { border: 1px solid rgba(16, 185, 129, 0.7); box-shadow: 0 0 12px rgba(16, 185, 129, 0.22); }
+.core-glow-debankita { border: 1px solid rgba(168, 85, 247, 0.7); box-shadow: 0 0 12px rgba(168, 85, 247, 0.22); }
+
+@keyframes eqBounce {
+    0%, 100% { height: 4px; }
+    50% { height: 11px; }
+}
+.eq-1 { animation: eqBounce 0.48s ease-in-out infinite; }
+.eq-2 { animation: eqBounce 0.35s ease-in-out infinite 0.12s; }
+.eq-3 { animation: eqBounce 0.58s ease-in-out infinite 0.24s; }
+.eq-paused { animation: none !important; height: 4px !important; }
+
+.touch-paddle {
+    background: linear-gradient(180deg, rgba(24, 31, 46, 0.96) 0%, rgba(12, 16, 25, 0.96) 100%);
+    border: 1px solid rgba(56, 189, 248, 0.42);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.6);
+    transition: transform 0.05s ease, background 0.05s ease;
+}
+.touch-paddle:active,
+.touch-paddle.active-press {
+    transform: scale(0.93);
+    background: rgba(56, 189, 248, 0.34);
+    border-color: #38bdf8;
+}
+
+@keyframes modalPop {
+    from { opacity: 0; transform: scale(0.97) translateY(4px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.modal-anim {
+    animation: modalPop 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes redKlaxonFlash {
+    0%, 100% { transform: scale(1); box-shadow: 0 0 35px rgba(239, 68, 68, 0.95); border-color: #ef4444; background: rgba(69, 10, 10, 0.94); }
+    50% { transform: scale(1.04); box-shadow: 0 0 65px rgba(255, 30, 66, 1); border-color: #fecdd3; background: rgba(127, 29, 29, 0.96); }
+}
+.red-klaxon-banner {
+    animation: redKlaxonFlash 0.38s ease-in-out infinite;
+}
+
+input::placeholder {
+    color: #4b5563 !important;
+    opacity: 1;
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: #263044 #090b10;
+}
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: #090b10; }
+::-webkit-scrollbar-thumb { background: #263044; border-radius: 4px; }
