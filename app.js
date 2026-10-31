@@ -1144,7 +1144,6 @@ function playGameSfx(type){
             g.gain.exponentialRampToValueAtTime(0.001,now+0.055);
             o.connect(g);g.connect(out);o.start(now);o.stop(now+0.06);
         }else if(type==='nitro'){
-            // Stage 1: Deep V8 Afterburner Ignition Roar
             const roarOsc=actx.createOscillator(),roarSub=actx.createOscillator(),roarFilter=actx.createBiquadFilter(),roarGain=actx.createGain();
             roarOsc.type='sawtooth';roarSub.type='square';
             roarOsc.frequency.setValueAtTime(95,now);
@@ -1161,7 +1160,6 @@ function playGameSfx(type){
             roarOsc.connect(roarFilter);roarSub.connect(roarFilter);roarFilter.connect(roarGain);roarGain.connect(out);
             roarOsc.start(now);roarSub.start(now);roarOsc.stop(now+0.39);roarSub.stop(now+0.39);
 
-            // Stage 2: Twin-Turbo Spool Whine
             const spoolOsc=actx.createOscillator(),spoolGain=actx.createGain();
             spoolOsc.type='triangle';
             spoolOsc.frequency.setValueAtTime(320,now);
@@ -1209,20 +1207,66 @@ function playGameSfx(type){
             o1.connect(g);o2.connect(g);g.connect(out);
             o1.start(now);o2.start(now);o1.stop(now+0.56);o2.stop(now+0.56);
         }else if(type==='hit'){
-            const o1=actx.createOscillator(),o2=actx.createOscillator(),flt=actx.createBiquadFilter(),g=actx.createGain();
-            o1.type='sawtooth';o2.type='triangle';
-            o1.frequency.setValueAtTime(146.83,now);o1.frequency.exponentialRampToValueAtTime(36.71,now+0.24);
-            o2.frequency.setValueAtTime(220.0,now);o2.frequency.exponentialRampToValueAtTime(55.0,now+0.24);
-            flt.type='lowpass';flt.frequency.setValueAtTime(460,now);
-            g.gain.setValueAtTime(0.001,now);
-            g.gain.linearRampToValueAtTime(0.24*sVol,now+0.006);
-            g.gain.exponentialRampToValueAtTime(0.001,now+0.26);
-            o1.connect(flt);o2.connect(flt);flt.connect(g);g.connect(out);
-            o1.start(now);o2.start(now);o1.stop(now+0.27);o2.stop(now+0.27);
+            if(!actx._crashNoiseBuf){
+                const len=Math.floor(actx.sampleRate*0.45);
+                const buf=actx.createBuffer(1,len,actx.sampleRate);
+                const data=buf.getChannelData(0);
+                for(let i=0;i<len;i++){
+                    const n=(Math.random()*2-1);
+                    data[i]=Math.tanh(n*2.2)*Math.pow(1-i/len,0.55);
+                }
+                actx._crashNoiseBuf=buf;
+            }
+
+            // Layer 1: Metallic Crunch & Chassis Scrape
+            const noiseSrc=actx.createBufferSource();
+            noiseSrc.buffer=actx._crashNoiseBuf;
+            const crunchFilter=actx.createBiquadFilter();
+            crunchFilter.type='bandpass';
+            crunchFilter.frequency.setValueAtTime(1850,now);
+            crunchFilter.frequency.exponentialRampToValueAtTime(320,now+0.32);
+            crunchFilter.Q.setValueAtTime(1.4,now);
+            const crunchGain=actx.createGain();
+            crunchGain.gain.setValueAtTime(0.001,now);
+            crunchGain.gain.linearRampToValueAtTime(0.48*sVol,now+0.004);
+            crunchGain.gain.exponentialRampToValueAtTime(0.001,now+0.34);
+            noiseSrc.connect(crunchFilter);
+            crunchFilter.connect(crunchGain);
+            crunchGain.connect(out);
+            noiseSrc.start(now);
+            noiseSrc.stop(now+0.35);
+
+            // Layer 2: High-Frequency Glass / Carbon Shatter Snap
+            const glassSrc=actx.createBufferSource();
+            glassSrc.buffer=actx._crashNoiseBuf;
+            const glassFilter=actx.createBiquadFilter();
+            glassFilter.type='highpass';
+            glassFilter.frequency.setValueAtTime(3200,now);
+            const glassGain=actx.createGain();
+            glassGain.gain.setValueAtTime(0.001,now);
+            glassGain.gain.linearRampToValueAtTime(0.28*sVol,now+0.002);
+            glassGain.gain.exponentialRampToValueAtTime(0.001,now+0.11);
+            glassSrc.connect(glassFilter);
+            glassFilter.connect(glassGain);
+            glassGain.connect(out);
+            glassSrc.start(now);
+            glassSrc.stop(now+0.12);
+
+            // Layer 3: Deep Kinetic Sub-Bass Body Thud
+            const punchOsc=actx.createOscillator(),punchGain=actx.createGain();
+            punchOsc.type='sine';
+            punchOsc.frequency.setValueAtTime(165,now);
+            punchOsc.frequency.exponentialRampToValueAtTime(28,now+0.26);
+            punchGain.gain.setValueAtTime(0.001,now);
+            punchGain.gain.linearRampToValueAtTime(0.52*sVol,now+0.004);
+            punchGain.gain.exponentialRampToValueAtTime(0.001,now+0.28);
+            punchOsc.connect(punchGain);
+            punchGain.connect(out);
+            punchOsc.start(now);
+            punchOsc.stop(now+0.29);
         }
     }catch(e){}
 }
-
 function handleFirstGestureAudioUnlock(e){
     if(e&&e.isTrusted){
         hasTrustedGesture=true;
