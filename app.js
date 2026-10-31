@@ -3068,14 +3068,290 @@ function renderMiniRadar(){
 ['low','medium','high','ultra'].forEach(k=>{
     if(GRAPHICS_PRESETS[k])GRAPHICS_PRESETS[k].legacyModels=false;
 });
-if(typeof gfxSettings==='object'&&gfxSettings.legacyModels===undefined){
-    gfxSettings.legacyModels=false;
+if(typeof gfxSettings==='object'){
+    if(gfxSettings.legacyModels===undefined)gfxSettings.legacyModels=false;
+    if(gfxSettings.voidChromaNitro===undefined)gfxSettings.voidChromaNitro=true;
 }
 if(Array.isArray(GFX_TOGGLE_META)&&!GFX_TOGGLE_META.some(m=>m.k==='legacyModels')){
     GFX_TOGGLE_META.push({k:'legacyModels',lbl:'👾 Legacy Models'});
 }
 
+let devGodModeActive=false;
+
+const OPTIC_FILTER_META=[
+    {k:'filter-standard',lbl:'✨ Standard Optic'},
+    {k:'filter-bw',lbl:'⚫ Black & White'},
+    {k:'filter-negative',lbl:'🔄 Negative'},
+    {k:'filter-warm',lbl:'🌅 Warm & Saturated'},
+    {k:'filter-vintage',lbl:'🎞️ Vintage'},
+    {k:'filter-cinematic',lbl:'🎬 Cinematic'}
+];
+const VALID_OPTIC_FILTERS=new Set(OPTIC_FILTER_META.map(f=>f.k));
+
+function injectCustomFilterAndGodStyles(){
+    let st=document.getElementById('customOpticAndGodStyleTag');
+    if(!st){
+        st=document.createElement('style');
+        st.id='customOpticAndGodStyleTag';
+        document.head.appendChild(st);
+    }
+    st.textContent=`
+        .filter-standard { filter: none !important; }
+        .filter-bw { filter: grayscale(100%) contrast(145%) brightness(96%) !important; }
+        .filter-negative { filter: invert(100%) hue-rotate(180deg) contrast(108%) !important; }
+        .filter-warm { filter: sepia(52%) saturate(310%) hue-rotate(-22deg) contrast(124%) brightness(106%) !important; }
+        .filter-vintage { filter: sepia(82%) saturate(72%) contrast(120%) brightness(88%) !important; }
+        .filter-cinematic { filter: contrast(142%) saturate(168%) brightness(94%) hue-rotate(-14deg) !important; }
+
+        #atmosphereOverlay.atmo-filter-warm {
+            background: radial-gradient(circle at 50% 42%, rgba(251, 146, 60, 0.20) 0%, rgba(225, 29, 72, 0.24) 58%, rgba(28, 6, 4, 0.68) 100%) !important;
+        }
+        #atmosphereOverlay.atmo-filter-vintage {
+            background: radial-gradient(circle at center, rgba(217, 119, 6, 0.10) 40%, rgba(28, 16, 6, 0.80) 100%) !important;
+            box-shadow: inset 0 0 55px rgba(0, 0, 0, 0.75) !important;
+        }
+        #atmosphereOverlay.atmo-filter-cinematic {
+            background: linear-gradient(180deg, rgba(2, 4, 10, 0.75) 0%, rgba(14, 165, 233, 0.10) 14%, rgba(0, 0, 0, 0) 50%, rgba(249, 115, 22, 0.14) 86%, rgba(2, 4, 10, 0.78) 100%), radial-gradient(circle at center, transparent 45%, rgba(2, 6, 18, 0.80) 100%) !important;
+            box-shadow: inset 0 0 45px rgba(0, 0, 0, 0.8) !important;
+        }
+
+        @keyframes godModePermPulse {
+            0%, 100% {
+                box-shadow: 0 0 16px rgba(0, 245, 212, 0.85), inset 0 0 12px rgba(0, 245, 212, 0.45);
+                border-color: #00f5d4;
+            }
+            50% {
+                box-shadow: 0 0 26px rgba(251, 191, 36, 0.95), inset 0 0 16px rgba(255, 0, 127, 0.45);
+                border-color: #fbbf24;
+            }
+        }
+        .god-mode-btn-active {
+            background: linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, rgba(15, 23, 42, 0.95) 50%, rgba(88, 28, 135, 0.92) 100%) !important;
+            color: #ffffff !important;
+            border: 1.5px solid #00f5d4 !important;
+            text-shadow: 0 0 8px rgba(0, 245, 212, 0.9);
+            animation: godModePermPulse 1.4s ease-in-out infinite !important;
+        }
+    `;
+}
+injectCustomFilterAndGodStyles();
+
+// Fix Weather & Stars slider so 0% (and 1% steps: 10, 9, 8... 0) never jumps back to 100%
+function updateGfxParticles(val,shouldSave=true){
+    const parsed=parseInt(val,10);
+    const num=Math.max(0,Math.min(150,Number.isNaN(parsed)?100:parsed));
+    gfxSettings.particles=num/100;
+    const lbl=document.getElementById('gfxParticleLabel');
+    if(lbl)lbl.innerText=`${num}%`;
+    const sld=document.getElementById('gfxParticleSlider');
+    if(sld){
+        if(sld.step!=='1')sld.step='1';
+        if(String(sld.value)!==String(num))sld.value=num;
+    }
+    if(shouldSave)saveSettingsForActiveAccount();
+}
+
+// Anti-Misclick Shield between Start Splash and Main Menu (Mobile & PC)
+let mainMenuSplashGuardUntil=0;
+let splashGuardBound=false;
+
+function bindMainMenuMisclickShield(){
+    if(splashGuardBound)return;
+    const startModalEl=document.getElementById('startModal');
+    if(!startModalEl)return;
+    splashGuardBound=true;
+    ['pointerdown','pointerup','mousedown','mouseup','touchstart','touchend','click'].forEach(evt=>{
+        startModalEl.addEventListener(evt,(e)=>{
+            if(performance.now()<mainMenuSplashGuardUntil){
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+            }
+        },true);
+    });
+}
+
+function createAndMountBootSplashGate(){
+    bindMainMenuMisclickShield();
+    if(document.getElementById('bootSplashGateModal'))return;
+    const wrapper=document.getElementById('gameViewportWrapper')||document.body;
+    const gate=document.createElement('div');
+    gate.id='bootSplashGateModal';
+    gate.className='absolute inset-0 bg-[#03050a]/95 z-[95] flex items-center justify-center p-4 select-none';
+    gate.innerHTML=`
+        <div class="hardware-panel modal-anim p-6 sm:p-8 rounded-2xl max-w-md w-full text-center space-y-4 border border-sky-500/40 shadow-[0_0_50px_rgba(14,165,233,0.25)]">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[10px] mono-num font-extrabold uppercase tracking-widest">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> SYSTEM ONLINE // AUDIO READY
+            </div>
+            <h1 class="title-cinzel text-xl sm:text-2xl font-black text-white tracking-wider">ROADSENSE: OVERDRIVE</h1>
+            <p class="text-xs text-gray-300 mono-num leading-relaxed">Neural Interceptor Telemetry &amp; Synth Audio Engine Ready.</p>
+            <button type="button" id="enterMainMenuGateBtn" class="btn-launch w-full py-3.5 px-6 rounded-xl text-sm sm:text-base font-extrabold uppercase tracking-wider cursor-pointer shadow-lg">
+                ▶ START / ENTER MAIN MENU
+            </button>
+            <div class="text-[10px] mono-num text-sky-300/80 uppercase tracking-wider">Tap button or press [ENTER] / [SPACE]</div>
+        </div>
+    `;
+    wrapper.appendChild(gate);
+    const startModalEl=document.getElementById('startModal');
+    if(startModalEl)startModalEl.style.display='none';
+
+    const triggerEnter=(ev)=>{
+        if(ev){
+            if(ev.type==='keydown'&&ev.key!=='Enter'&&ev.key!==' ')return;
+            ev.preventDefault();
+            ev.stopPropagation();
+            if(typeof ev.stopImmediatePropagation==='function')ev.stopImmediatePropagation();
+        }
+        enterMainMenuFromSplash();
+    };
+    gate.addEventListener('pointerdown',triggerEnter,{passive:false});
+    gate.addEventListener('click',triggerEnter,{passive:false});
+    const btn=gate.querySelector('#enterMainMenuGateBtn');
+    if(btn){
+        btn.addEventListener('pointerdown',triggerEnter,{passive:false});
+        btn.addEventListener('click',triggerEnter,{passive:false});
+    }
+}
+
+function enterMainMenuFromSplash(){
+    if(isBootSplashDismissed)return;
+    isBootSplashDismissed=true;
+    hasTrustedGesture=true;
+    mainMenuSplashGuardUntil=performance.now()+450;
+    bindMainMenuMisclickShield();
+
+    const gate=document.getElementById('bootSplashGateModal');
+    const startModalEl=document.getElementById('startModal');
+    if(startModalEl){
+        startModalEl.style.pointerEvents='none';
+        startModalEl.style.display='flex';
+    }
+    if(gate){
+        gate.style.pointerEvents='all';
+        gate.style.opacity='0';
+        setTimeout(()=>{
+            gate.style.display='none';
+            gate.style.opacity='1';
+        },180);
+    }
+    setTimeout(()=>{
+        if(startModalEl)startModalEl.style.pointerEvents='auto';
+    },450);
+
+    ensureAudioEngine();
+    tryStartMenuUnlockAudio();
+    playGameSfx('pickup');
+    syncCursorVisibility();
+}
+
+function playGodModeToggleSfx(enabled){
+    if(audioSettings.master<=0.01||!isAppAudible()||!hasTrustedGesture)return;
+    try{
+        const actx=ensureAudioEngine();
+        if(!actx||actx.state!=='running')return;
+        const now=actx.currentTime,sVol=Math.max(0.2,audioSettings.sfx);
+        const out=sfxBusNode||masterGainNode;
+        const notes=enabled?[440.0,554.37,659.25,880.0,1174.66]:[880.0,659.25,493.88,329.63];
+        notes.forEach((freq,idx)=>{
+            const o=actx.createOscillator(),g=actx.createGain(),st=now+idx*0.045;
+            o.type=enabled?'triangle':'sawtooth';
+            o.frequency.setValueAtTime(freq,st);
+            g.gain.setValueAtTime(0.001,st);
+            g.gain.linearRampToValueAtTime(0.18*sVol,st+0.008);
+            g.gain.exponentialRampToValueAtTime(0.001,st+0.24);
+            o.connect(g);g.connect(out);
+            o.start(st);o.stop(st+0.25);
+        });
+    }catch(e){}
+}
+
+function ensureDevGodModeButtonUI(){
+    const devToggleBtn=document.getElementById('devToggleDimsBtn');
+    if(!devToggleBtn||document.getElementById('devGodModeToggleBtn'))return;
+    const grid=devToggleBtn.parentElement;
+    if(!grid)return;
+    grid.className="grid grid-cols-2 sm:grid-cols-4 gap-1.5";
+    const godBtn=document.createElement('button');
+    godBtn.type='button';
+    godBtn.id='devGodModeToggleBtn';
+    godBtn.onclick=toggleDevGodMode;
+    grid.insertBefore(godBtn,grid.firstChild);
+    syncDevGodModeButtonUI();
+}
+
+function syncDevGodModeButtonUI(){
+    const btn=document.getElementById('devGodModeToggleBtn');
+    if(!btn)return;
+    if(devGodModeActive&&currentPilot.id==='1117'){
+        btn.innerText="⚡ GOD MODE: ACTIVE";
+        btn.className="god-mode-btn-active p-2 rounded-xl text-[10.5px] mono-num font-extrabold cursor-pointer text-center transition";
+    }else{
+        btn.innerText="🛡️ God Mode: OFF";
+        btn.className="p-2 rounded-xl bg-cyan-950/70 hover:bg-cyan-800/80 text-cyan-200 border border-cyan-500/40 text-[10.5px] mono-num font-bold cursor-pointer text-center transition";
+    }
+}
+
+function toggleDevGodMode(){
+    if(currentPilot.id!=='1117')return;
+    devGodModeActive=!devGodModeActive;
+    if(devGodModeActive){
+        gameState.armor=100;
+        gameState.nitroFuel=100;
+        gameState.empCharge=100;
+        updateHudDOM(true);
+    }
+    syncDevGodModeButtonUI();
+    playGodModeToggleSfx(devGodModeActive);
+    showDevConsoleFeedback(devGodModeActive?"⚡ GOD MODE ENGAGED: Infinite Hull, Nitro & EMP Active!":"🛡️ God Mode Deactivated.");
+}
+
+function toggleVoidNitroMode(){
+    gfxSettings.voidChromaNitro=!gfxSettings.voidChromaNitro;
+    buildVehicleLiverySelector();
+    saveSettingsForActiveAccount();
+}
+
+function buildVehicleLiverySelector(){
+    const container=document.getElementById('vehicleLiveryGrid');
+    const hint=document.getElementById('liveryAccessHint');
+    if(!container)return;
+    const isArch=(currentPilot.id==="1117");
+    if(hint){
+        if(activeLiveryProfile.isVoidChroma){
+            const isPrisma=(gfxSettings.voidChromaNitro!==false);
+            hint.innerHTML=`<span class="hidden sm:inline">${isArch?"👑 ID 1117":"Active"} • </span><button type="button" onclick="toggleVoidNitroMode()" class="px-2 py-0.5 rounded bg-purple-500/20 hover:bg-purple-500/35 border border-cyan-400/50 text-[9.5px] mono-num font-extrabold text-cyan-200 cursor-pointer transition">${isPrisma?"🌈 Nitro: Prismatic Chroma":"🟠 Nitro: Default Flame"}</button>`;
+        }else{
+            hint.innerText=isArch?"👑 ID 1117: All Liveries Unlocked":`Assigned: ${activeLiveryProfile.liveryName}`;
+        }
+    }
+    container.innerHTML=["1117","1183","1134","1075","1174","GUEST"].map(k=>{
+        const p=PILOT_PROFILES[k];
+        const unlocked=isArch||(currentPilot.id===k);
+        const sel=(activeLiveryProfile.id===k);
+        if(!unlocked)return `<button type="button" disabled class="px-2 py-1.5 rounded-lg text-[10px] font-semibold text-left truncate border bg-[#0b0d14] border-[#1b202e] text-gray-600 opacity-55 cursor-not-allowed">🔒 ${p.liveryName}</button>`;
+        return `<button type="button" onclick="selectVehicleLivery('${k}')" class="px-2 py-1.5 rounded-lg text-[10px] font-bold text-left truncate cursor-pointer border flex items-center gap-1.5 ${sel?'bg-sky-500/25 border-sky-400 text-white':'bg-[#121621] border-[#22293a] text-gray-300 hover:text-white'}"><span class="w-2 h-2 rounded-full shrink-0" style="background:${p.dotColor}"></span><span class="truncate">${p.liveryName}</span></button>`;
+    }).join('');
+}
+
+function selectVehicleLivery(k){
+    if(currentPilot.id!=="1117"&&currentPilot.id!==k)return;
+    activeLiveryProfile=PILOT_PROFILES[k]||currentPilot;
+    if(activeLiveryProfile.isVoidChroma){
+        gfxSettings.voidChromaNitro=true;
+    }
+    document.getElementById('activeLiveryBadge').innerText=activeLiveryProfile.liveryName;
+    document.getElementById('activePilotColorDot').style.backgroundColor=activeLiveryProfile.dotColor;
+    document.getElementById('hudPilotDot').style.backgroundColor=activeLiveryProfile.dotColor;
+    buildVehicleLiverySelector();
+    saveSettingsForActiveAccount();
+}
+
 function buildGraphicsUI(){
+    injectCustomFilterAndGodStyles();
+    ensureDevGodModeButtonUI();
+    const pSld=document.getElementById('gfxParticleSlider');
+    if(pSld)pSld.step='1';
+
     const pGrid=document.getElementById('gfxPresetButtonsGrid');
     if(pGrid){
         pGrid.innerHTML=['low','medium','high','ultra'].map(k=>{
@@ -3091,23 +3367,56 @@ function buildGraphicsUI(){
         GFX_TOGGLE_META.forEach(t=>applyGfxOptionState(t.k,gfxSettings[t.k],false));
     }
     const fGrid=document.getElementById('gfxFilterButtonsGrid');
-    const filters=[
-        {k:'filter-standard',lbl:'✨ Standard Optic'},
-        {k:'filter-requiem-noir',lbl:'🖤 RE: Requiem Noir'},
-        {k:'filter-requiem-ash',lbl:'🌫️ RE: Requiem Ash'},
-        {k:'filter-dl2-grit',lbl:'🌇 DL2: Harran Grit'},
-        {k:'filter-dl2-darkzone',lbl:'🌑 DL2: Darkzone'},
-        {k:'filter-stark-mono',lbl:'⚡ High-Contrast B&W'}
-    ];
     if(fGrid){
-        fGrid.innerHTML=filters.map(f=>`<button type="button" onclick="setVisualFilter('${f.k}')" id="flt_${f.k}" class="p-2 rounded-lg text-[10.5px] font-semibold cursor-pointer truncate"></button>`).join('');
-        setVisualFilter(gfxSettings.filter,false);
+        const parentWell=fGrid.parentElement;
+        if(parentWell&&!document.getElementById('deactivateOpticFilterBtn')){
+            const hdr=parentWell.firstElementChild;
+            if(hdr){
+                hdr.className="flex items-center justify-between gap-2";
+                hdr.innerHTML=`
+                    <span class="font-bold text-white uppercase text-[11px] mono-num">🎬 Optic Color Grade</span>
+                    <button type="button" id="deactivateOpticFilterBtn" onclick="setVisualFilter('filter-standard')" class="hidden px-2 py-0.5 rounded-md bg-red-500/20 hover:bg-red-500/35 text-red-300 border border-red-500/40 text-[9.5px] mono-num font-extrabold cursor-pointer transition">✕ Deactivate Filter</button>
+                `;
+            }
+        }
+        fGrid.innerHTML=OPTIC_FILTER_META.map(f=>`<button type="button" onclick="setVisualFilter('${f.k}')" id="flt_${f.k}" class="p-2 rounded-lg text-[10.5px] font-semibold cursor-pointer truncate"></button>`).join('');
+        setVisualFilter(VALID_OPTIC_FILTERS.has(gfxSettings.filter)?gfxSettings.filter:'filter-standard',false);
     }
+}
+
+function setVisualFilter(fc,shouldSave=true){
+    injectCustomFilterAndGodStyles();
+    const safeFilter=VALID_OPTIC_FILTERS.has(fc)?fc:'filter-standard';
+    gfxSettings.filter=safeFilter;
+    canvas.className=safeFilter;
+
+    const ov=document.getElementById('atmosphereOverlay');
+    if(ov){
+        ov.classList.toggle('atmo-filter-warm',safeFilter==='filter-warm');
+        ov.classList.toggle('atmo-filter-vintage',safeFilter==='filter-vintage');
+        ov.classList.toggle('atmo-filter-cinematic',safeFilter==='filter-cinematic');
+    }
+
+    OPTIC_FILTER_META.forEach(f=>{
+        const btn=document.getElementById(`flt_${f.k}`);
+        if(!btn)return;
+        btn.innerText=f.lbl;
+        btn.className=(f.k===safeFilter)
+            ?"p-2 rounded-lg text-[10.5px] font-bold bg-sky-500 text-black cursor-pointer truncate"
+            :"p-2 rounded-lg text-[10.5px] font-semibold bg-[#151a26] text-gray-300 border border-[#262f45] hover:text-white cursor-pointer truncate";
+    });
+    const deactBtn=document.getElementById('deactivateOpticFilterBtn');
+    if(deactBtn){
+        deactBtn.classList.toggle('hidden',safeFilter==='filter-standard');
+    }
+    if(shouldSave)saveSettingsForActiveAccount();
 }
 
 function loadOrResetSettingsForActiveAccount(){
     isApplyingAccountSettings=true;
     try{
+        if(currentPilot.id!=='1117')devGodModeActive=false;
+        syncDevGodModeButtonUI();
         const allSet=JSON.parse(localStorage.getItem(SETTINGS_PER_ACC_KEY)||'{}');
         const saved=allSet[getActiveAccountStorageKey()];
         if(saved){
@@ -3148,7 +3457,8 @@ function loadOrResetSettingsForActiveAccount(){
                 ['bloom','shake','transitions','scanlines','pillars','reflections','speedLines','hudBoxes','legacyModels'].forEach(k=>{
                     if(saved.gfx[k]!==undefined)applyGfxOptionState(k,saved.gfx[k],false);
                 });
-                setVisualFilter(saved.gfx.filter||'filter-standard',false);
+                gfxSettings.voidChromaNitro=(saved.gfx.voidChromaNitro!==undefined)?Boolean(saved.gfx.voidChromaNitro):true;
+                setVisualFilter(VALID_OPTIC_FILTERS.has(saved.gfx.filter)?saved.gfx.filter:'filter-standard',false);
             }
         }else{
             resetGameSettingsOnly();
@@ -3158,14 +3468,33 @@ function loadOrResetSettingsForActiveAccount(){
         }
     }catch(e){}
     isApplyingAccountSettings=false;
+    buildVehicleLiverySelector();
     saveSettingsForActiveAccount();
 }
 
 function resetGraphicsSettingsOnly(){
     gfxSettings.legacyModels=false;
+    gfxSettings.voidChromaNitro=true;
     setVisualFilter('filter-standard',false);
     applyGraphicsPreset('medium',true);
 }
+
+// Wrap updateGamePhysics so God Mode (ID 1117) locks Hull, Nitro & EMP at 100% and prevents collision damage
+const _baseUpdateGamePhysics=updateGamePhysics;
+updateGamePhysics=function(dt,now){
+    const godActive=(devGodModeActive&&currentPilot.id==='1117');
+    if(godActive){
+        gameState.armor=100;
+        gameState.nitroFuel=100;
+        gameState.empCharge=100;
+    }
+    _baseUpdateGamePhysics(dt,now);
+    if(godActive){
+        gameState.armor=100;
+        gameState.nitroFuel=100;
+        gameState.empCharge=100;
+    }
+};
 
 function adminDeleteAllGuestAccounts(){
     if(currentPilot.id!=='1117')return;
@@ -3258,7 +3587,6 @@ function triggerEpoch250BigRedWarning(){
     playGameSfx('siren250');
 }
 
-// Exact road projection from 1.html / 1.js (narrow at horizon -> slanting out left/right to wide at bottom on PC & Mobile)
 function projectX(laneOffset,zSafe,W,H,roadCurve=0){
     const scale=(H*0.85)/zSafe;
     const zNorm=zSafe*0.0181818;
@@ -3278,9 +3606,6 @@ const REAL_LIFE_HAZARD_DIMS={
     7:{w:26,h:9}   // speed_bump
 };
 
-// 🔧 PER-CLASS LANE PROPORTIONS & STOPPERS:
-// laneFrac = fraction of 1 lane width occupied by this class (grows with the lane from z=60m so it NEVER shrinks)
-// zStop    = depth where full growth stops so no class ever balloons larger than your Roadster
 const CLASS_SCALE_STOPPERS={
     0:{laneFrac:0.38,zStop:2.25,unitW:20}, // auto_rickshaw
     1:{laneFrac:0.48,zStop:2.35,unitW:28}, // bus_truck
@@ -3290,7 +3615,7 @@ const CLASS_SCALE_STOPPERS={
     5:{laneFrac:0.27,zStop:2.40,unitW:18}, // stray_animal
     6:{laneFrac:0.46,zStop:2.20,unitW:22}, // pothole
     7:{laneFrac:0.56,zStop:2.15,unitW:26}, // speed_bump
-    pickup:{laneFrac:0.22,zStop:2.30,unitW:12} // Nitro, EMP & Hull particles (2 * r = 12 * s)
+    pickup:{laneFrac:0.22,zStop:2.30,unitW:12} // Nitro, EMP & Hull particles
 };
 
 let activeRenderClassKey='pickup';
@@ -3301,15 +3626,12 @@ function getRigidPerspectiveScale(zSafe,W,H,classKeyOverride){
     const stopper=CLASS_SCALE_STOPPERS[key]||CLASS_SCALE_STOPPERS.pickup;
 
     const zClamped=Math.max(1.25,Math.min(60.0,zSafe));
-    // Exact pixel width of 1 lane at this class's stopper depth (automatically scales on PC & Mobile)
     const laneWidthAtStopper=LANE_WIDTH_M*((H*0.85)/stopper.zStop)*0.24;
     const sAtStopper=(laneWidthAtStopper*stopper.laneFrac)/stopper.unitW;
 
     if(zClamped>=stopper.zStop){
-        // From horizon (z=60) down to zStop: grows continuously with the road perspective so it NEVER shrinks
         return sAtStopper*Math.pow(stopper.zStop/zClamped,0.85);
     }
-    // From zStop past your Roadster (z=1.25): damped stopper so it holds visual size without growing larger than your car
     return sAtStopper*Math.pow(stopper.zStop/zClamped,0.22);
 }
 
@@ -4819,7 +5141,8 @@ function renderSceneFrame(now){
     ctx.fill();
     ctx.stroke();
 
-    const borderGlowCol=gameState.boosting?"#fbbf24":activeRailColor;
+    // Keep car body, mirrors, canopy & spoiler in true livery color (never forced yellow when boosting)
+    const borderGlowCol=activeRailColor;
     if(gfxSettings.bloom){
         ctx.shadowBlur=isMobileHardware?12:18;
         ctx.shadowColor=borderGlowCol;
@@ -4920,7 +5243,8 @@ function renderSceneFrame(now){
     ctx.fill();
     ctx.stroke();
 
-    const tailCol=gameState.braking?"#ff1e42":(gameState.boosting?"#fbbf24":(activeLiveryProfile.isVoidChroma?activeRailColor:"#f43f5e"));
+    // Tail light blades keep their true livery/brake color (not forced yellow on Nitro)
+    const tailCol=gameState.braking?"#ff1e42":(activeLiveryProfile.isVoidChroma?activeRailColor:"#f43f5e");
     if(gfxSettings.bloom){
         ctx.shadowBlur=gameState.braking?18:10;
         ctx.shadowColor=tailCol;
@@ -4946,38 +5270,87 @@ function renderSceneFrame(now){
     });
     ctx.stroke();
 
-    const exhaustCol=gameState.boosting?"#38bdf8":activeLiveryProfile.thrusterColor;
+    // Dedicated Twin Side Thruster Ports + Center Afterburner Nozzle (shows where Nitro flames originate)
+    const usePrismaticNitro=Boolean(activeLiveryProfile.isVoidChroma&&gfxSettings.voidChromaNitro!==false);
+    const chromaFlame1=`hsl(${voidHue},100%,62%)`;
+    const chromaFlame2=`hsl(${(voidHue+115)%360},100%,64%)`;
+    const chromaFlame3=`hsl(${(voidHue+230)%360},100%,68%)`;
+    const nozzleRimCol=gameState.boosting?(usePrismaticNitro?chromaFlame1:"#fbbf24"):activeLiveryProfile.thrusterColor;
+    const leftNozzleX=Math.round(carCenterX-fasciaW*0.36);
+    const rightNozzleX=Math.round(carCenterX+fasciaW*0.36);
+
     ctx.fillStyle="#090d16";
-    ctx.strokeStyle=exhaustCol;
+    ctx.strokeStyle=nozzleRimCol;
     ctx.lineWidth=1.4;
     ctx.beginPath();
+    ctx.roundRect(leftNozzleX-6,diffY+1,12,4.5,2);
+    ctx.roundRect(rightNozzleX-6,diffY+1,12,4.5,2);
     ctx.roundRect(carCenterX-8,diffY+1,16,5,2);
     ctx.fill();
     ctx.stroke();
 
     if(gameState.boosting){
         const flameLen=14+Math.random()*12;
-        if(gfxSettings.bloom){
-            ctx.shadowBlur=16;
-            ctx.shadowColor="#fbbf24";
-        }
-        ctx.fillStyle="rgba(251,191,36,0.92)";
-        ctx.beginPath();
-        ctx.moveTo(carCenterX-fasciaW*0.52,diffuserBotY-2);
-        ctx.lineTo(carCenterX-fasciaW*0.36,diffuserBotY+flameLen);
-        ctx.lineTo(carCenterX-fasciaW*0.20,diffuserBotY-2);
-        ctx.moveTo(carCenterX+fasciaW*0.20,diffuserBotY-2);
-        ctx.lineTo(carCenterX+fasciaW*0.36,diffuserBotY+flameLen);
-        ctx.lineTo(carCenterX+fasciaW*0.52,diffuserBotY-2);
-        ctx.fill();
+        if(usePrismaticNitro){
+            // Dark-Matter Prismatic Chroma Nitro (ID 1117 Livery)
+            if(gfxSettings.bloom){
+                ctx.shadowBlur=18;
+                ctx.shadowColor=chromaFlame1;
+            }
+            ctx.fillStyle=chromaFlame1;
+            ctx.beginPath();
+            ctx.moveTo(carCenterX-fasciaW*0.52,diffuserBotY-2);
+            ctx.lineTo(leftNozzleX,diffuserBotY+flameLen*1.08);
+            ctx.lineTo(carCenterX-fasciaW*0.20,diffuserBotY-2);
+            ctx.moveTo(carCenterX+fasciaW*0.20,diffuserBotY-2);
+            ctx.lineTo(rightNozzleX,diffuserBotY+flameLen*1.08);
+            ctx.lineTo(carCenterX+fasciaW*0.52,diffuserBotY-2);
+            ctx.fill();
 
-        ctx.fillStyle="#e0f2fe";
-        ctx.beginPath();
-        ctx.moveTo(carCenterX-6,diffuserBotY-2);
-        ctx.lineTo(carCenterX,diffuserBotY+flameLen*1.25);
-        ctx.lineTo(carCenterX+6,diffuserBotY-2);
-        ctx.fill();
-        ctx.shadowBlur=0;
+            ctx.fillStyle=chromaFlame2;
+            ctx.beginPath();
+            ctx.moveTo(leftNozzleX-4,diffuserBotY-2);
+            ctx.lineTo(leftNozzleX,diffuserBotY+flameLen*0.72);
+            ctx.lineTo(leftNozzleX+4,diffuserBotY-2);
+            ctx.moveTo(rightNozzleX-4,diffuserBotY-2);
+            ctx.lineTo(rightNozzleX,diffuserBotY+flameLen*0.72);
+            ctx.lineTo(rightNozzleX+4,diffuserBotY-2);
+            ctx.moveTo(carCenterX-7,diffuserBotY-2);
+            ctx.lineTo(carCenterX,diffuserBotY+flameLen*1.32);
+            ctx.lineTo(carCenterX+7,diffuserBotY-2);
+            ctx.fill();
+
+            ctx.fillStyle=chromaFlame3;
+            ctx.beginPath();
+            ctx.moveTo(carCenterX-4,diffuserBotY-2);
+            ctx.lineTo(carCenterX,diffuserBotY+flameLen*0.92);
+            ctx.lineTo(carCenterX+4,diffuserBotY-2);
+            ctx.fill();
+            ctx.shadowBlur=0;
+        }else{
+            // Default Nitro (Other Core Accounts, Guests, or when Default Nitro is toggled on)
+            if(gfxSettings.bloom){
+                ctx.shadowBlur=16;
+                ctx.shadowColor="#fbbf24";
+            }
+            ctx.fillStyle="rgba(251,191,36,0.92)";
+            ctx.beginPath();
+            ctx.moveTo(carCenterX-fasciaW*0.52,diffuserBotY-2);
+            ctx.lineTo(leftNozzleX,diffuserBotY+flameLen);
+            ctx.lineTo(carCenterX-fasciaW*0.20,diffuserBotY-2);
+            ctx.moveTo(carCenterX+fasciaW*0.20,diffuserBotY-2);
+            ctx.lineTo(rightNozzleX,diffuserBotY+flameLen);
+            ctx.lineTo(carCenterX+fasciaW*0.52,diffuserBotY-2);
+            ctx.fill();
+
+            ctx.fillStyle="#e0f2fe";
+            ctx.beginPath();
+            ctx.moveTo(carCenterX-6,diffuserBotY-2);
+            ctx.lineTo(carCenterX,diffuserBotY+flameLen*1.25);
+            ctx.lineTo(carCenterX+6,diffuserBotY-2);
+            ctx.fill();
+            ctx.shadowBlur=0;
+        }
     }
 
     // ==================== UPGRADED 3D NEURAL EMP SHOCKWAVE & LIGHTNING DOME ====================
@@ -5216,4 +5589,3 @@ function mainLoop(now){
 }
 requestAnimationFrame(mainLoop);
 // --- END OF MINI-CHUNK 6.4 OF 4 ---
-// ==================== END OF CHUNK 6 OF 6 ====================
