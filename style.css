@@ -23,24 +23,39 @@ body, html {
     background: var(--bg-canvas);
     color: #e2e8f0;
     font-family: 'DM Sans', sans-serif;
-    touch-action: none;
+    touch-action: manipulation;
     -webkit-font-smoothing: antialiased;
 }
 
-/* Fix touch dragging on all Settings sliders & scrolling inside modals on mobile */
+/* Lock touch-action: none ONLY on the game canvas & HUD controls so Settings sliders & scrollbars work */
+canvas#gameCanvas,
+header,
+footer,
+.touch-paddle {
+    touch-action: none;
+}
+
+#pauseSettingsModal,
+#leaderboardModal,
+#startModal,
+#gameOverModal,
+.overflow-y-auto {
+    touch-action: pan-x pan-y !important;
+    -webkit-overflow-scrolling: touch;
+}
+
 input[type="range"] {
     touch-action: pan-x pan-y !important;
     -webkit-user-select: auto !important;
     user-select: auto !important;
+    min-height: 22px;
 }
-input[type="text"], input[type="number"] {
+
+input[type="text"],
+input[type="number"] {
     touch-action: manipulation !important;
     -webkit-user-select: text !important;
     user-select: text !important;
-}
-.overflow-y-auto {
-    touch-action: pan-y !important;
-    -webkit-overflow-scrolling: touch;
 }
 
 body.is-pc.gameplay-active,
@@ -154,7 +169,7 @@ canvas#gameCanvas {
     box-shadow: inset 0 0 45px rgba(0, 245, 212, 0.12);
 }
 
-#hudEpoch, #hudScore, #hudCombo, #hudArmorPct, #hudWarningBadge, #hudBiomeName, #hudNitroPct, #hudEmpPct {
+#hudEpoch, #hudScore, #hudCombo, #hudArmorPct, #hudWarningBadge, #hudBiomeName, #hudNitroPct, #hudEmpPct, #hudLeaderMini {
     white-space: nowrap !important;
     display: inline-block;
 }
@@ -171,13 +186,13 @@ footer {
 }
 
 /* =========================================================================
-   LOCK FULLSCREEN-ANDROID LANDSCAPE UI & HUD LAYOUT ON ALL PHONES
-   (Works identically in non-fullscreen Portrait-rotated & Landscape modes)
+   UNIFIED ANDROID LANDSCAPE UI & HUD (IDENTICAL IN FULLSCREEN & NON-FULLSCREEN)
    ========================================================================= */
 body.is-mobile header {
     padding: 0.35rem 0.55rem !important;
 }
 body.is-mobile header > div {
+    align-items: flex-start !important;
     gap: 0.35rem !important;
     width: 100% !important;
     max-width: 100% !important;
@@ -186,6 +201,7 @@ body.is-mobile header .hardware-panel {
     padding: 0.25rem 0.55rem !important;
     gap: 0.4rem !important;
     border-radius: 0.75rem !important;
+    height: 2.15rem !important;
 }
 body.is-mobile header .recessed-well {
     padding: 0.12rem 0.38rem !important;
@@ -203,7 +219,11 @@ body.is-mobile #hudWarningBadge {
     font-size: 9px !important;
     padding: 0.12rem 0.38rem !important;
 }
-/* Keep "HULL" label visible and Hull bar wide like Fullscreen Android */
+/* Hide 2-line leader text on mobile header so center pill never pushes VOID // ARCHITECT down into Radar */
+body.is-mobile header span.hidden.md\:inline {
+    display: none !important;
+}
+/* Keep "HULL" label visible and Hull bar wide on all mobile screens */
 body.is-mobile header .recessed-well > span.hidden {
     display: inline !important;
     font-size: 8.5px !important;
@@ -213,13 +233,13 @@ body.is-mobile header .recessed-well > div.w-7 {
 }
 body.is-mobile #mobilePauseBtn,
 body.is-mobile #mobileHideUiBtn {
-    padding: 0.25rem 0.55rem !important;
+    padding: 0.22rem 0.52rem !important;
     font-size: 10px !important;
 }
 
-/* Left Radar + Nitro/EMP Dock: Force Fullscreen Android `sm:w-24` (96px) so text never wraps */
+/* Left Radar + Nitro/EMP Dock: Clean vertical separation below VOID // ARCHITECT in both Fullscreen & Non-Fullscreen */
 body.is-mobile div.hud-collapsible.absolute.left-2 {
-    top: 2.75rem !important;
+    top: 3.25rem !important;
     left: 0.55rem !important;
     gap: 0.35rem !important;
 }
@@ -304,9 +324,9 @@ body.is-mobile #setTab_dev .grid {
     #pauseSettingsModal > .hardware-panel {
         max-height: 96% !important;
     }
-    div.hud-collapsible.absolute.left-2 {
-        top: 2.45rem !important;
-        transform: scale(0.92);
+    body.is-mobile div.hud-collapsible.absolute.left-2 {
+        top: 3.05rem !important;
+        transform: scale(0.90);
         transform-origin: top left;
     }
     footer .touch-paddle {
