@@ -3065,7 +3065,6 @@ function renderMiniRadar(){
 // ==================== END OF CHUNK 5 OF 6 ====================
 // ==================== START OF CHUNK 6 OF 6 ====================
 // --- START OF MINI-CHUNK 6.1 OF 4 ---
-// --- START OF MINI-CHUNK 6.1 OF 4 ---
 ['low','medium','high','ultra'].forEach(k=>{
     if(GRAPHICS_PRESETS[k])GRAPHICS_PRESETS[k].legacyModels=false;
 });
@@ -3078,6 +3077,15 @@ if(Array.isArray(GFX_TOGGLE_META)&&!GFX_TOGGLE_META.some(m=>m.k==='legacyModels'
 }
 
 let devGodModeActive=false;
+let lbAdminManageMode=false;
+const PER_ACC_RESET_TS_KEY='roadSense_overdrive_perAccResetTs_v11';
+
+function getPerAccountResetMap(){
+    try{return JSON.parse(localStorage.getItem(PER_ACC_RESET_TS_KEY)||'{}');}catch(e){return {};}
+}
+function savePerAccountResetMap(mapObj){
+    localStorage.setItem(PER_ACC_RESET_TS_KEY,JSON.stringify(mapObj||{}));
+}
 
 const OPTIC_FILTER_META=[
     {k:'filter-standard',lbl:'✨ Standard Optic'},
@@ -3133,6 +3141,27 @@ function injectCustomFilterAndGodStyles(){
             text-shadow: 0 0 8px rgba(0, 245, 212, 0.9);
             animation: godModePermPulse 1.4s ease-in-out infinite !important;
         }
+
+        /* Stop Chrome compositor from fighting rotated scrollbars & remove nested scroll trap */
+        body.is-mobile #pauseSettingsModal,
+        body.is-mobile #leaderboardModal,
+        body.is-mobile #startModal,
+        body.is-mobile #gameOverModal,
+        body.is-mobile .overflow-y-auto,
+        body.is-mobile input[type="range"] {
+            touch-action: none !important;
+            overscroll-behavior: contain !important;
+        }
+        #biomeGridSelector {
+            max-height: none !important;
+            overflow: visible !important;
+        }
+        body.is-mobile #setTab_sounds .recessed-well > .grid.ost-grid-2col {
+            grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        }
+        body.is-mobile #setTab_sounds .recessed-well > .grid.ost-grid-3col {
+            grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        }
     `;
 }
 injectCustomFilterAndGodStyles();
@@ -3152,14 +3181,58 @@ function updateGfxParticles(val,shouldSave=true){
     if(shouldSave)saveSettingsForActiveAccount();
 }
 
-// Fix Settings Sliders (<input type="range">) & Modal Scrolling on Non-Fullscreen & Fullscreen Android
+// Unified Mobile Scrollbar & Range Slider Engine (Fixes 90deg Non-Fullscreen & Fullscreen Scrolling + Blocks Accidental Button Clicks on Swipe)
 (function bindMobileNonFullscreenSlidersAndScroll(){
     if(window._mobRotSliderBound)return;
     window._mobRotSliderBound=true;
 
     let activeSlider=null;
     let activeScroller=null;
-    let lastClientX=0,lastClientY=0;
+    let startX=0,startY=0,lastX=0,lastY=0;
+    let totalDragDist=0;
+    let isScrollDragging=false;
+    let suppressNextClickUntil=0;
+    let momentumRafId=0;
+    let scrollVelocity=0;
+    let lastMoveTs=0;
+
+    const stopMomentum=()=>{
+        if(momentumRafId){
+            cancelAnimationFrame(momentumRafId);
+            momentumRafId=0;
+        }
+        scrollVelocity=0;
+    };
+
+    const findScrollableTarget=(el)=>{
+        let cur=el;
+        let fallback=null;
+        while(cur&&cur!==document.body&&cur!==document.documentElement){
+            if(cur.classList&&cur.classList.contains('overflow-y-auto')){
+                if(!fallback)fallback=cur;
+                if(cur.scrollHeight>cur.clientHeight+1)return cur;
+            }
+            cur=cur.parentElement;
+        }
+        return fallback;
+    };
+
+    const applyScrollDelta=(scroller,delta)=>{
+        if(!scroller||!delta)return;
+        const prev=scroller.scrollTop;
+        const maxScroll=Math.max(0,scroller.scrollHeight-scroller.clientHeight);
+        if(maxScroll>0){
+            scroller.scrollTop=Math.max(0,Math.min(maxScroll,prev+delta));
+        }
+        const consumed=scroller.scrollTop-prev;
+        const remainder=delta-consumed;
+        if(Math.abs(remainder)>0.5&&scroller.parentElement){
+            const parentScroller=findScrollableTarget(scroller.parentElement);
+            if(parentScroller&&parentScroller!==scroller){
+                parentScroller.scrollTop+=remainder;
+            }
+        }
+    };
 
     const setSliderFromPoint=(clientX,clientY,sld)=>{
         const rect=sld.getBoundingClientRect();
@@ -3182,74 +3255,110 @@ function updateGfxParticles(val,shouldSave=true){
         }
     };
 
+    // Suppress accidental button clicks when lifting finger after scrolling
+    ['click','pointerup','mouseup'].forEach(evt=>{
+        document.addEventListener(evt,(e)=>{
+            if(performance.now()<suppressNextClickUntil){
+                e.preventDefault();
+                e.stopPropagation();
+                if(typeof e.stopImmediatePropagation==='function')e.stopImmediatePropagation();
+            }
+        },true);
+    });
+
     document.addEventListener('touchstart',(e)=>{
         if(!isMobileHardware||!e.touches||!e.touches[0])return;
+        stopMomentum();
         const t=e.touches[0];
+        startX=lastX=t.clientX;
+        startY=lastY=t.clientY;
+        totalDragDist=0;
+        isScrollDragging=false;
+        lastMoveTs=performance.now();
+
         const sld=e.target&&e.target.closest?e.target.closest('input[type="range"]'):null;
         if(sld){
             activeSlider=sld;
             activeScroller=null;
-            if(window.innerHeight>window.innerWidth&&e.cancelable)e.preventDefault();
+            if(e.cancelable)e.preventDefault();
             setSliderFromPoint(t.clientX,t.clientY,sld);
             return;
         }
-        const scroller=e.target&&e.target.closest?e.target.closest('.overflow-y-auto'):null;
-        if(scroller&&(window.innerHeight>window.innerWidth)){
-            activeScroller=scroller;
-            lastClientX=t.clientX;
-            lastClientY=t.clientY;
-        }
+        activeSlider=null;
+        activeScroller=e.target&&e.target.closest?findScrollableTarget(e.target):null;
     },{capture:true,passive:false});
 
     document.addEventListener('touchmove',(e)=>{
-        if(!e.touches||!e.touches[0])return;
+        if(!isMobileHardware||!e.touches||!e.touches[0])return;
         const t=e.touches[0];
+        const now=performance.now();
+        const dt=Math.max(4,now-lastMoveTs);
+        lastMoveTs=now;
+
         if(activeSlider){
             if(e.cancelable)e.preventDefault();
             e.stopPropagation();
             setSliderFromPoint(t.clientX,t.clientY,activeSlider);
             return;
         }
-        if(activeScroller&&(window.innerHeight>window.innerWidth)){
-            const dx=t.clientX-lastClientX;
-            if(Math.abs(dx)>1.5){
+
+        if(activeScroller){
+            const isRotated=(window.innerHeight>window.innerWidth);
+            const rawDx=t.clientX-lastX;
+            const rawDy=t.clientY-lastY;
+            lastX=t.clientX;
+            lastY=t.clientY;
+
+            // In rotate(90deg) portrait mode, visual vertical scroll axis is physical clientX; in normal landscape it is -clientY
+            const scrollDelta=isRotated?rawDx:(-rawDy);
+            totalDragDist+=Math.hypot(rawDx,rawDy);
+
+            if(totalDragDist>6){
+                isScrollDragging=true;
+            }
+            if(isScrollDragging){
                 if(e.cancelable)e.preventDefault();
-                activeScroller.scrollTop+=dx;
-                lastClientX=t.clientX;
-                lastClientY=t.clientY;
+                e.stopPropagation();
+                applyScrollDelta(activeScroller,scrollDelta);
+                const instVel=scrollDelta/dt;
+                scrollVelocity=scrollVelocity*0.45+instVel*0.55;
             }
         }
     },{capture:true,passive:false});
 
-    ['touchend','touchcancel'].forEach(evt=>{
-        document.addEventListener(evt,()=>{
+    const endTouchInteraction=()=>{
+        if(activeSlider){
             activeSlider=null;
-            activeScroller=null;
-        },{capture:true,passive:true});
-    });
-
-    document.addEventListener('pointerdown',(e)=>{
-        if(!isMobileHardware||(e.pointerType==='touch'&&'ontouchstart' in window))return;
-        const sld=e.target&&e.target.closest?e.target.closest('input[type="range"]'):null;
-        if(sld){
-            activeSlider=sld;
-            if(window.innerHeight>window.innerWidth&&e.cancelable)e.preventDefault();
-            try{sld.setPointerCapture(e.pointerId);}catch(err){}
-            setSliderFromPoint(e.clientX,e.clientY,sld);
+            return;
         }
-    },{capture:true,passive:false});
+        if(isScrollDragging&&activeScroller){
+            suppressNextClickUntil=performance.now()+340;
+            const targetScroller=activeScroller;
+            let vel=scrollVelocity*16;
+            const stepMomentum=()=>{
+                if(Math.abs(vel)<0.6){
+                    momentumRafId=0;
+                    return;
+                }
+                applyScrollDelta(targetScroller,vel);
+                vel*=0.91;
+                momentumRafId=requestAnimationFrame(stepMomentum);
+            };
+            if(Math.abs(vel)>1.2){
+                momentumRafId=requestAnimationFrame(stepMomentum);
+            }
+        }
+        activeScroller=null;
+        isScrollDragging=false;
+    };
 
-    document.addEventListener('pointermove',(e)=>{
-        if(!activeSlider||(e.pointerType==='touch'&&'ontouchstart' in window))return;
-        if(e.cancelable)e.preventDefault();
-        setSliderFromPoint(e.clientX,e.clientY,activeSlider);
-    },{capture:true,passive:false});
-
-    ['pointerup','pointercancel'].forEach(evt=>{
-        document.addEventListener(evt,()=>{
-            if(e.pointerType!=='touch')activeSlider=null;
-        },{capture:true,passive:true});
-    });
+    document.addEventListener('touchend',endTouchInteraction,{capture:true,passive:true});
+    document.addEventListener('touchcancel',()=>{
+        stopMomentum();
+        activeSlider=null;
+        activeScroller=null;
+        isScrollDragging=false;
+    },{capture:true,passive:true});
 })();
 
 // Anti-Misclick Shield between Start Splash and Main Menu (Mobile & PC)
@@ -3343,6 +3452,65 @@ function enterMainMenuFromSplash(){
     tryStartMenuUnlockAudio();
     playGameSfx('pickup');
     syncCursorVisibility();
+}
+
+// Show "🎧 Mixtape" ONLY for ID 1117; completely hide for all other Core members & Guests
+function syncMixtapeOstVisibilityUI(){
+    const isArch=(currentPilot&&currentPilot.id==='1117');
+    const mitBtn=document.getElementById('ostBtn_mitadru');
+    if(mitBtn){
+        const titleRow=mitBtn.firstElementChild;
+        if(titleRow&&titleRow.firstElementChild){
+            titleRow.firstElementChild.innerText='🎧 Mixtape';
+        }
+        const badge=document.getElementById('mitadruOstBadge');
+        if(badge)badge.innerText='👑 1117';
+
+        const grid=mitBtn.parentElement;
+        if(isArch){
+            mitBtn.classList.remove('hidden');
+            mitBtn.style.display='';
+            if(grid)grid.className='grid grid-cols-1 sm:grid-cols-3 gap-1.5 ost-grid-3col';
+        }else{
+            mitBtn.classList.add('hidden');
+            mitBtn.style.display='none';
+            if(grid)grid.className='grid grid-cols-1 sm:grid-cols-2 gap-1.5 ost-grid-2col';
+            if(audioSettings.ostMode==='mitadru'){
+                audioSettings.ostMode='synth';
+            }
+        }
+    }
+}
+
+function selectOstMode(mode){
+    syncMixtapeOstVisibilityUI();
+    if(mode==='mitadru'&&currentPilot.id!=='1117'){
+        mode='synth';
+    }
+    if(mode==='custom'&&!currentCustomObjectUrl){
+        const stTxt=document.getElementById('customSongStatusText');
+        if(stTxt)stTxt.innerText="⚠️ Upload a song file (≤ 20 MB) first!";
+        return;
+    }
+    audioSettings.ostMode=mode;
+    ['synth','mitadru','custom'].forEach(m=>{
+        const btn=document.getElementById(`ostBtn_${m}`);
+        if(!btn)return;
+        if(m==='mitadru'&&currentPilot.id!=='1117'){
+            btn.classList.add('hidden');
+            btn.style.display='none';
+            return;
+        }
+        btn.className=(m===mode)
+            ?"p-2 rounded-xl text-left border bg-sky-500/20 border-sky-400 text-white cursor-pointer"
+            :"p-2 rounded-xl text-left border bg-[#141824] border-[#262f45] text-gray-300 cursor-pointer";
+    });
+    const shortLabel=document.getElementById('hudOstShortLabel');
+    const statusEl=document.getElementById('ostLockStatus');
+    if(shortLabel)shortLabel.innerText=mode==='mitadru'?"MIXTAPE":(mode==='custom'?"CUSTOM":"SYNTH");
+    if(statusEl)statusEl.innerText=mode==='mitadru'?"Mixtape Active":(mode==='custom'?"Custom Song Active":"Cyber-Synth Active");
+    syncExternalTrackPlayback();
+    saveSettingsForActiveAccount();
 }
 
 function playGodModeToggleSfx(enabled){
@@ -3450,6 +3618,7 @@ function selectVehicleLivery(k){
 function buildGraphicsUI(){
     injectCustomFilterAndGodStyles();
     ensureDevGodModeButtonUI();
+    syncMixtapeOstVisibilityUI();
     const pSld=document.getElementById('gfxParticleSlider');
     if(pSld)pSld.step='1';
 
@@ -3516,8 +3685,12 @@ function setVisualFilter(fc,shouldSave=true){
 function loadOrResetSettingsForActiveAccount(){
     isApplyingAccountSettings=true;
     try{
-        if(currentPilot.id!=='1117')devGodModeActive=false;
+        if(currentPilot.id!=='1117'){
+            devGodModeActive=false;
+            lbAdminManageMode=false;
+        }
         syncDevGodModeButtonUI();
+        syncMixtapeOstVisibilityUI();
         const allSet=JSON.parse(localStorage.getItem(SETTINGS_PER_ACC_KEY)||'{}');
         const saved=allSet[getActiveAccountStorageKey()];
         if(saved){
@@ -3569,6 +3742,7 @@ function loadOrResetSettingsForActiveAccount(){
         }
     }catch(e){}
     isApplyingAccountSettings=false;
+    syncMixtapeOstVisibilityUI();
     buildVehicleLiverySelector();
     saveSettingsForActiveAccount();
 }
@@ -3597,20 +3771,482 @@ updateGamePhysics=function(dt,now){
     }
 };
 
+// ==================== UNIFIED CUSTOM SONGS MANAGER (DEV 1117 + INDIVIDUAL & ALL DELETE) ====================
+function resetSavedAccountOstIfCustom(accKey){
+    try{
+        const allSet=JSON.parse(localStorage.getItem(SETTINGS_PER_ACC_KEY)||'{}');
+        if(allSet[accKey]&&allSet[accKey].audio&&allSet[accKey].audio.ostMode==='custom'){
+            allSet[accKey].audio.ostMode='synth';
+            localStorage.setItem(SETTINGS_PER_ACC_KEY,JSON.stringify(allSet));
+        }
+    }catch(e){}
+}
+
+async function deleteCustomSongByKey(accKey){
+    try{
+        const db=await openCustomSongsIDB();
+        await new Promise((res)=>{
+            const tx=db.transaction('songs','readwrite');
+            tx.objectStore('songs').delete(accKey);
+            tx.oncomplete=()=>res();
+            tx.onerror=()=>res();
+        });
+        resetSavedAccountOstIfCustom(accKey);
+        if(accKey===getActiveAccountStorageKey()){
+            await loadCustomSongForActivePilot();
+        }else{
+            await renderDevCustomSongsList();
+        }
+        if(currentPilot.id==='1117'){
+            showDevConsoleFeedback(`✓ Custom Song Removed for ${CORE_IDS.has(accKey)?PILOT_PROFILES[accKey].name:accKey.replace('GUEST_ID_','Guest #')}!`);
+        }
+        playGameSfx('uiClick');
+    }catch(e){}
+}
+
+async function devRemoveAllCustomSongs(){
+    if(currentPilot.id!=='1117')return;
+    try{
+        const db=await openCustomSongsIDB();
+        await new Promise((res)=>{
+            const tx=db.transaction('songs','readwrite');
+            tx.objectStore('songs').clear();
+            tx.oncomplete=()=>res();
+            tx.onerror=()=>res();
+        });
+        const allSet=JSON.parse(localStorage.getItem(SETTINGS_PER_ACC_KEY)||'{}');
+        Object.keys(allSet).forEach(k=>{
+            if(allSet[k]&&allSet[k].audio&&allSet[k].audio.ostMode==='custom'){
+                allSet[k].audio.ostMode='synth';
+            }
+        });
+        localStorage.setItem(SETTINGS_PER_ACC_KEY,JSON.stringify(allSet));
+        await loadCustomSongForActivePilot();
+        showDevConsoleFeedback("✓ All Custom Uploaded Songs (Core, 1117 & Guests) Removed!");
+        playGameSfx('pickup');
+    }catch(e){}
+}
+
+async function renderDevCustomSongsList(){
+    const container=document.getElementById('devCustomSongsList');
+    if(!container||currentPilot.id!=='1117')return;
+    try{
+        const parentBox=container.parentElement;
+        if(parentBox&&parentBox.firstElementChild){
+            parentBox.firstElementChild.className="hidden";
+        }
+        const db=await openCustomSongsIDB();
+        const allRecords=await new Promise((res)=>{
+            const tx=db.transaction('songs','readonly');
+            const req=tx.objectStore('songs').getAll();
+            req.onsuccess=()=>res(req.result||[]);
+            req.onerror=()=>res([]);
+        });
+
+        const count=allRecords.length;
+        const headerHtml=`
+            <div class="flex flex-wrap items-center justify-between gap-1.5 pb-1.5 mb-1.5 border-b border-[#1d2638]">
+                <div class="flex items-center gap-1.5">
+                    <span class="text-[10.5px] font-extrabold text-cyan-300 mono-num uppercase">🎵 Custom Songs Vault</span>
+                    <span class="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 text-[9px] mono-num font-bold">${count} Active</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <button type="button" onclick="document.getElementById('customSongFileInput').click()" class="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border border-emerald-500/40 text-[9px] mono-num font-bold cursor-pointer transition">📤 Upload (1117)</button>
+                    <button type="button" onclick="devRemoveAllCustomSongs()" ${count===0?'disabled':''} class="px-2 py-0.5 rounded text-[9px] mono-num font-bold transition ${count>0?'bg-red-600/85 hover:bg-red-500 text-white cursor-pointer':'bg-[#141926] text-gray-600 border border-[#22293a] cursor-not-allowed'}">🗑️ Clear All (${count})</button>
+                </div>
+            </div>
+        `;
+
+        if(count===0){
+            container.className="space-y-1 text-[10px] mono-num text-gray-400";
+            container.innerHTML=headerHtml+`<div class="text-gray-500 py-1 text-center">No custom songs uploaded by Core or Guest pilots yet.</div>`;
+            return;
+        }
+
+        container.className="space-y-1.5 text-[10px] mono-num text-gray-300";
+        const rowsHtml=allRecords.map(r=>{
+            const mb=(r.sizeBytes/(1024*1024)).toFixed(1);
+            const accK=String(r.accountKey||'');
+            const isSelf=(accK==='1117');
+            const isCore=CORE_IDS.has(accK);
+            const roleBadge=isSelf
+                ?`<span class="px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 text-[8.5px] font-extrabold shrink-0">👑 1117</span>`
+                :(isCore
+                    ?`<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/40 text-[8.5px] font-bold shrink-0">⚡ CORE #${escapeHtml(accK)}</span>`
+                    :`<span class="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30 text-[8.5px] shrink-0">👤 GUEST</span>`);
+            return `
+                <div class="flex items-center justify-between gap-2 bg-[#121724] px-2.5 py-1.5 rounded-lg border border-[#232c42]">
+                    <div class="flex items-center gap-1.5 min-w-0">
+                        ${roleBadge}
+                        <span class="truncate text-gray-200">${escapeHtml(r.pilotName||accK)}: <strong class="text-white">${escapeHtml(r.fileName)}</strong> <span class="text-gray-400">(${mb}MB)</span></span>
+                    </div>
+                    <button type="button" onclick="deleteCustomSongByKey('${escapeHtml(accK)}')" class="px-2 py-0.5 rounded bg-red-500/20 hover:bg-red-500/40 text-red-300 border border-red-500/40 text-[9px] font-extrabold shrink-0 cursor-pointer transition">✕ Delete</button>
+                </div>
+            `;
+        }).join('');
+        container.innerHTML=headerHtml+`<div class="space-y-1 max-h-28 overflow-y-auto pr-0.5">${rowsHtml}</div>`;
+    }catch(e){}
+}
+
+// ==================== PER-PILOT RESET & CLEAN LEADERBOARD MANAGE MODE (ID 1117) ====================
+function reconcileAllPilotScores(){
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    const perAccReset=getPerAccountResetMap();
+    const db=getAccountsDatabase();
+    let rawLb=[];
+    try{rawLb=JSON.parse(localStorage.getItem(LB_STORAGE_KEY)||'[]');}catch(e){rawLb=[];}
+    if(!Array.isArray(rawLb))rawLb=[];
+
+    const lbMap=new Map();
+
+    rawLb.forEach(item=>{
+        if(!item)return;
+        const sc=Number(item.score)||0;
+        const itemTs=Number(item.ts)||0;
+        if(sc<=0)return;
+        if(lastCloudResetTs&&itemTs>0&&itemTs<lastCloudResetTs)return;
+        const k=normalizeEntryAccountKey(item);
+        if(!k||delSet.has(k))return;
+        if(perAccReset[k]&&(!itemTs||itemTs<=Number(perAccReset[k])))return;
+
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const gid=isCore?"":(item.guestId||extractGuestIdTag(item));
+        const canonicalName=isCore?prof.name:(item.name||'Guest Pilot');
+        const ep=Math.max(1,Number(item.epoch)||1);
+        const prev=lbMap.get(k);
+        if(!prev||sc>prev.score||(sc===prev.score&&ep>prev.epoch)){
+            lbMap.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(gid==='GUEST'?'':gid),
+                accountKey:k,
+                name:canonicalName,
+                score:Math.max(sc,prev?prev.score:0),
+                epoch:Math.max(ep,prev?prev.epoch:1),
+                ts:Math.max(itemTs,prev?prev.ts:0)||Date.now()
+            });
+        }
+    });
+
+    let dbChanged=false;
+    Object.keys(db).forEach(rawKey=>{
+        const rec=db[rawKey];
+        if(!rec)return;
+        if(lastCloudResetTs&&rec.updatedAt&&Number(rec.updatedAt)<lastCloudResetTs){
+            delete db[rawKey];
+            dbChanged=true;
+            return;
+        }
+        const k=CORE_IDS.has(rawKey)?rawKey:(resolveCorePilotFromInputs(rawKey,rec.name)||rawKey);
+        if(delSet.has(k)){
+            delete db[rawKey];
+            dbChanged=true;
+            return;
+        }
+        if(perAccReset[k]&&rec.updatedAt&&Number(rec.updatedAt)<=Number(perAccReset[k])){
+            if(CORE_IDS.has(k)){
+                db[k]={id:k,guestId:"",name:PILOT_PROFILES[k].name,isCore:true,bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false,updatedAt:Number(perAccReset[k])+1};
+            }else{
+                delete db[rawKey];
+            }
+            dbChanged=true;
+            return;
+        }
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const dbScore=Math.max(0,Number(rec.bestScore)||0);
+        const dbEpoch=Math.max(1,Number(rec.bestEpoch)||1);
+        const lbEntry=lbMap.get(k);
+        const maxScore=Math.max(dbScore,lbEntry?lbEntry.score:0);
+        const maxEpoch=maxScore>0?Math.max(dbEpoch,lbEntry?lbEntry.epoch:1):dbEpoch;
+
+        if(maxScore!==dbScore||maxEpoch!==dbEpoch||k!==rawKey){
+            db[k]={
+                ...rec,
+                id:k,
+                guestId:isCore?"":(rec.guestId||k.replace('GUEST_ID_','')),
+                name:isCore?prof.name:(rec.name||`Pilot #${k.replace('GUEST_ID_','')}`),
+                isCore,
+                bestScore:maxScore,
+                bestEpoch:maxEpoch,
+                totalFlashes:Math.max(0,Number(rec.totalFlashes)||0),
+                completedEpoch250:Boolean(rec.completedEpoch250||maxEpoch>250),
+                updatedAt:rec.updatedAt||Date.now()
+            };
+            if(k!==rawKey)delete db[rawKey];
+            dbChanged=true;
+        }
+        if(maxScore>0){
+            lbMap.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(db[k].guestId||k.replace('GUEST_ID_','')),
+                accountKey:k,
+                name:isCore?prof.name:(db[k].name||'Guest Pilot'),
+                score:maxScore,
+                epoch:maxEpoch,
+                ts:lbEntry?lbEntry.ts:(db[k].updatedAt||Date.now())
+            });
+        }
+    });
+
+    lbMap.forEach((entry,k)=>{
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const prev=db[k]||{bestScore:0,bestEpoch:1,totalFlashes:0,completedEpoch250:false};
+        if((Number(prev.bestScore)||0)<entry.score||(Number(prev.bestEpoch)||1)<entry.epoch){
+            db[k]={
+                id:k,
+                guestId:isCore?"":(entry.guestId||k.replace('GUEST_ID_','')),
+                name:isCore?prof.name:(entry.name||prev.name||'Guest Pilot'),
+                isCore,
+                bestScore:Math.max(Number(prev.bestScore)||0,entry.score),
+                bestEpoch:Math.max(Number(prev.bestEpoch)||1,entry.epoch),
+                totalFlashes:Math.max(0,Number(prev.totalFlashes)||0),
+                completedEpoch250:Boolean(prev.completedEpoch250||entry.epoch>250),
+                updatedAt:entry.ts||Date.now()
+            };
+            dbChanged=true;
+        }
+    });
+
+    if(dbChanged)saveAccountsDatabase(db);
+    const sorted=Array.from(lbMap.values()).sort((a,b)=>b.score-a.score).slice(0,100);
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(sorted));
+    updateTopLeaderBanner(sorted);
+    return sorted;
+}
+
+function mergeRemoteLeaderboardPacket(packet){
+    if(!packet||typeof packet!=='object')return;
+
+    if(packet.resetTs&&Number(packet.resetTs)>lastCloudResetTs){
+        lastCloudResetTs=Number(packet.resetTs);
+        localStorage.setItem('roadSense_overdrive_resetTs_v8',String(lastCloudResetTs));
+        localStorage.setItem(ACCOUNTS_DB_KEY,JSON.stringify({}));
+        localStorage.setItem(LB_STORAGE_KEY,JSON.stringify([]));
+        refreshAccountStatsUI();
+        updateTopLeaderBanner([]);
+        if(document.getElementById('leaderboardModal').style.display!=='none')renderLeaderboardList();
+    }
+
+    if(packet.perAccResetTs&&typeof packet.perAccResetTs==='object'){
+        const localMap=getPerAccountResetMap();
+        let mapChanged=false;
+        Object.entries(packet.perAccResetTs).forEach(([k,tsVal])=>{
+            const numTs=Number(tsVal)||0;
+            if(numTs>(Number(localMap[k])||0)){
+                localMap[k]=numTs;
+                mapChanged=true;
+            }
+        });
+        if(mapChanged)savePerAccountResetMap(localMap);
+    }
+
+    if(Array.isArray(packet.deletedAccounts)&&packet.deletedAccounts.length>0){
+        const safeIncoming=packet.deletedAccounts.filter(k=>k&&!CORE_IDS.has(String(k)));
+        saveDeletedAccountKeys(Array.from(new Set([...sanitizeDeletedAccountKeys(),...safeIncoming])));
+    }
+
+    const delSet=new Set(sanitizeDeletedAccountKeys());
+    const perAccReset=getPerAccountResetMap();
+    const mapByKey=new Map();
+    getLocalLeaderboard().forEach(item=>{
+        const k=normalizeEntryAccountKey(item);
+        if(k&&!delSet.has(k)&&item.score>0)mapByKey.set(k,item);
+    });
+
+    (Array.isArray(packet.entries)?packet.entries:[]).forEach(rem=>{
+        const remScore=Number(rem&&rem.score)||0;
+        const remTs=Number(rem&&rem.ts)||0;
+        if(remScore<=0)return;
+        if(lastCloudResetTs&&(!remTs||remTs<=lastCloudResetTs))return;
+        const k=normalizeEntryAccountKey(rem);
+        if(!k||delSet.has(k))return;
+        if(perAccReset[k]&&(!remTs||remTs<=Number(perAccReset[k])))return;
+
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const ex=mapByKey.get(k);
+        const remEpoch=Math.max(1,Number(rem.epoch)||1);
+        if(!ex||remScore>ex.score){
+            mapByKey.set(k,{
+                id:isCore?k:'GUEST',
+                guestId:isCore?'':(rem.guestId||extractGuestIdTag(rem)),
+                accountKey:k,
+                name:isCore?prof.name:(rem.name||'Guest Pilot'),
+                score:Math.max(remScore,ex?ex.score:0),
+                epoch:Math.max(remEpoch,ex?ex.epoch:1),
+                ts:remTs||Date.now()
+            });
+        }
+    });
+
+    saveLocalLeaderboard(Array.from(mapByKey.values()));
+    refreshAccountStatsUI();
+    if(document.getElementById('leaderboardModal').style.display!=='none')renderLeaderboardList();
+}
+
+function pushCloudLeaderboardPacket(extra={}){
+    const payload={
+        type:'lb_sync_v10',
+        resetTs:lastCloudResetTs,
+        perAccResetTs:getPerAccountResetMap(),
+        entries:getLocalLeaderboard().slice(0,35),
+        deletedAccounts:sanitizeDeletedAccountKeys(),
+        ...extra
+    };
+    if(lbChannel){try{lbChannel.postMessage(payload);}catch(e){}}
+    fetch(CLOUD_SYNC_URL_V10,{method:'POST',body:JSON.stringify(payload)}).catch(()=>{});
+}
+
+function toggleLeaderboardAdminManageMode(){
+    if(currentPilot.id!=='1117')return;
+    lbAdminManageMode=!lbAdminManageMode;
+    renderLeaderboardList();
+}
+
+function ensureLeaderboardManageHeaderBtn(){
+    const lbModal=document.getElementById('leaderboardModal');
+    if(!lbModal)return;
+    const hdr=lbModal.querySelector('.border-b');
+    if(!hdr)return;
+    let btnWrap=document.getElementById('lbHeaderActionGroup');
+    if(!btnWrap){
+        const backBtn=hdr.querySelector('button');
+        if(!backBtn)return;
+        btnWrap=document.createElement('div');
+        btnWrap.id='lbHeaderActionGroup';
+        btnWrap.className='flex items-center gap-1.5 shrink-0';
+        const manageBtn=document.createElement('button');
+        manageBtn.type='button';
+        manageBtn.id='lbAdminManageToggleBtn';
+        manageBtn.onclick=toggleLeaderboardAdminManageMode;
+        hdr.replaceChild(btnWrap,backBtn);
+        btnWrap.appendChild(manageBtn);
+        btnWrap.appendChild(backBtn);
+    }
+    const manageBtn=document.getElementById('lbAdminManageToggleBtn');
+    if(!manageBtn)return;
+    if(currentPilot.id==='1117'){
+        manageBtn.classList.remove('hidden');
+        manageBtn.innerText=lbAdminManageMode?'✓ Done':'🛠️ Manage';
+        manageBtn.className=lbAdminManageMode
+            ?'px-2.5 py-1.5 rounded-lg bg-cyan-500 text-black font-extrabold text-xs cursor-pointer transition shadow-[0_0_12px_rgba(0,245,212,0.5)]'
+            :'px-2.5 py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 text-xs font-bold cursor-pointer transition';
+    }else{
+        lbAdminManageMode=false;
+        manageBtn.classList.add('hidden');
+    }
+}
+
+// Clean Leaderboard Renderer: Zero buttons on cards unless 1117 toggles "🛠️ Manage"
+function renderLeaderboardList(){
+    ensureLeaderboardManageHeaderBtn();
+    const container=document.getElementById('leaderboardListContainer');
+    if(!container)return;
+    const list=getLocalLeaderboard();
+    const isAdmin=(currentPilot.id==='1117');
+    if(list.length===0){
+        container.innerHTML=`<div class="recessed-well p-6 rounded-xl text-center space-y-1"><div class="text-sm font-bold text-white">No Runs Recorded Yet</div><p class="text-xs text-gray-400">Complete a run to claim #1 on the Global Leaderboard!</p></div>`;
+        return;
+    }
+    const medals=["🥇 #1","🥈 #2","🥉 #3"];
+    container.innerHTML=list.map((entry,idx)=>{
+        const k=normalizeEntryAccountKey(entry);
+        const isCore=CORE_IDS.has(k);
+        const prof=isCore?PILOT_PROFILES[k]:PILOT_PROFILES["GUEST"];
+        const accKey=k||entry.accountKey||entry.id;
+        const gTag=isCore?'':extractGuestIdTag(entry);
+        const dispName=isCore?prof.name:((gTag!=='GUEST'&&!String(entry.name).includes(`#${gTag}`))?`${entry.name} (#${gTag})`:entry.name);
+
+        // Only show sleek compact reset/remove pill when 1117 enables Manage Mode (never clutters cards normally)
+        const actionBtn=(isAdmin&&lbAdminManageMode)
+            ?`<button type="button" onclick="adminDeleteIndividualScore('${escapeHtml(accKey)}')" title="Reset Score, Epoch & Phantom Flashes" class="ml-2 px-2 py-1 rounded-lg bg-black/65 hover:bg-red-600/90 text-red-200 hover:text-white border border-white/20 text-[9.5px] mono-num font-extrabold cursor-pointer transition shrink-0">${isCore?'↺ Reset':'✕ Remove'}</button>`
+            :'';
+
+        const badge=prof.isVoidChroma
+            ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-extrabold rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/50">👑 ARCHITECT VOID</span>`
+            :(isCore
+                ?`<span class="px-1.5 py-0.5 text-[9px] mono-num font-bold rounded bg-white/10 text-gray-200">⚡ CORE #${k}</span>`
+                :`<span class="px-1.5 py-0.5 text-[9px] mono-num rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">👤 GUEST #${escapeHtml(gTag)}</span>`);
+        return `<div class="p-3 rounded-xl flex items-center justify-between gap-2 transition ${prof.lbClass}"><div class="flex items-center gap-2.5 min-w-0"><span class="mono-num text-xs font-black text-white px-2 py-1 rounded bg-black/40 border border-white/10 shrink-0">${medals[idx]||`#${idx+1}`}</span><div class="min-w-0"><div class="flex items-center gap-1.5 flex-wrap"><span class="text-xs sm:text-sm truncate ${prof.nameClass}">${escapeHtml(dispName)}</span>${badge}</div><div class="text-[10px] mono-num text-gray-400">Epoch ${entry.epoch||1} &bull; ${prof.liveryName}</div></div></div><div class="flex items-center shrink-0"><span class="mono-num text-sm sm:text-base font-black text-emerald-400">${entry.score.toLocaleString()}</span>${actionBtn}</div></div>`;
+    }).join('');
+}
+
+// Deletes individual Leaderboard vote/score AND resets Main Menu Best Score, Max Epoch & Phantom Flashes (Core, 1117 Himself, or Guest)
+function adminDeleteIndividualScore(targetKey){
+    if(currentPilot.id!=='1117')return;
+    const cleanKey=String(targetKey||'').trim();
+    if(!cleanKey)return;
+    const nowTs=Date.now();
+    const isCore=CORE_IDS.has(cleanKey);
+
+    // 1. Record per-account reset timestamp so old cloud scores never bounce back
+    const resetMap=getPerAccountResetMap();
+    resetMap[cleanKey]=nowTs;
+    savePerAccountResetMap(resetMap);
+
+    // 2. Reset Main Menu stats (Best Score: 0, Max Epoch: 1, Phantom Flashes: 0) in Accounts DB
+    const db=getAccountsDatabase();
+    if(isCore){
+        db[cleanKey]={
+            id:cleanKey,
+            guestId:"",
+            name:PILOT_PROFILES[cleanKey].name,
+            isCore:true,
+            bestScore:0,
+            bestEpoch:1,
+            totalFlashes:0,
+            completedEpoch250:false,
+            updatedAt:nowTs+1
+        };
+    }else{
+        delete db[cleanKey];
+        const delList=sanitizeDeletedAccountKeys();
+        if(!delList.includes(cleanKey)){
+            delList.push(cleanKey);
+            saveDeletedAccountKeys(delList);
+        }
+    }
+    saveAccountsDatabase(db);
+
+    // 3. Remove from Leaderboard DB
+    let rawLb=[];
+    try{rawLb=JSON.parse(localStorage.getItem(LB_STORAGE_KEY)||'[]');}catch(e){rawLb=[];}
+    const filteredLb=(Array.isArray(rawLb)?rawLb:[]).filter(e=>normalizeEntryAccountKey(e)!==cleanKey);
+    localStorage.setItem(LB_STORAGE_KEY,JSON.stringify(filteredLb));
+
+    // 4. Reconcile, sync to cloud, and refresh Main Menu & Leaderboard UI
+    reconcileAllPilotScores();
+    pushCloudLeaderboardPacket();
+    refreshAccountStatsUI();
+    buildBiomeSelectorGrid();
+    renderLeaderboardList();
+    showDevConsoleFeedback(`✓ Reset Score, Epoch & Flashes for ${isCore?PILOT_PROFILES[cleanKey].name:cleanKey.replace('GUEST_ID_','Guest #')}!`);
+    playGameSfx('pickup');
+}
+
 function adminDeleteAllGuestAccounts(){
     if(currentPilot.id!=='1117')return;
     const db=getAccountsDatabase();
     const delSet=new Set(sanitizeDeletedAccountKeys());
+    const resetMap=getPerAccountResetMap();
+    const nowTs=Date.now();
     Object.keys(db).forEach(k=>{
         if(!CORE_IDS.has(k)){
             delSet.add(k);
+            resetMap[k]=nowTs;
             delete db[k];
         }
     });
     getLocalLeaderboard().forEach(e=>{
         const k=normalizeEntryAccountKey(e);
-        if(!CORE_IDS.has(k))delSet.add(k);
+        if(!CORE_IDS.has(k)){
+            delSet.add(k);
+            resetMap[k]=nowTs;
+        }
     });
+    savePerAccountResetMap(resetMap);
     saveDeletedAccountKeys(Array.from(delSet));
     saveAccountsDatabase(db);
     const coreOnly=getLocalLeaderboard().filter(e=>CORE_IDS.has(normalizeEntryAccountKey(e)));
@@ -3838,7 +4474,8 @@ function ensureHazardVariant(hz){
         hz.variantIdx=rngBit%2;
     }
 }
-// --- END OF MINI-CHUNK 6.1 OF 4 ---// --- START OF MINI-CHUNK 6.2 OF 4 ---
+// --- END OF MINI-CHUNK 6.1 OF 4 ---
+//--- START OF MINI-CHUNK 6.2 OF 4 ---
 function ensureCachedBiomeGradients(W,H,horizonY,theme){
     const key=`${W}_${H}_${biomeIdx}`;
     if(cachedGradients.key===key)return;
